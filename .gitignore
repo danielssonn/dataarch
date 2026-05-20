@@ -1,0 +1,9 @@
+# Agent internals  
+.openclaw/  
+
+# OS junk  
+.DS_Store  
+Thumbs.db  
+  
+# Node artifacts from Mermaid rendering (optional)  
+node_modules/
