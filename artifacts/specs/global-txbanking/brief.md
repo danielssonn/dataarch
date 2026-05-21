@@ -123,10 +123,16 @@ Domain Execution         ← ISO messages hit the wire; ledger entries post
 
 This tenet directly informs containment zone design: external vendor systems produce domain-level execution data (raw ISO messages, proprietary status codes). Containment absorbs them as-is; progressive mapping lifts signal upward through rail → product → intent layers over time until it lands in Core ontology terms that reflect what the client actually needed and received.
 
-### Tenet 3 *(Flagged)* — Business-Friendly Abstraction Above ISO 20022
-ISO 20022 is technically rich but not business-intuitive. The Top tier must present payment concepts at level of intent + execution status, NOT message-level fidelity. Technical rail selection and geography constraints are resolved automatically by the platform.
+---
 
-⚠️ This tenet expands on Tenet #1 above once ISO 20022 → Business Ontology mapping patterns get fully unpacked.
+## Compliance & Regulatory Scope (In-Scope)
+Client onboarding and ongoing regulatory compliance are **in-scope** for the data platform:
+- KYC/CDD at client onboarding stage with full audit trail of verification steps/sources/timestamps/decision-makers involved in each check before account opens or access granted to any product/service
+- AML/sanctions screening as part of Core ontology layer (not Containment zone — regulatory compliance is foundational to the entity graph, not bolted-on after core model matures)
+  - Real-time transaction monitoring feeds into Platform Observer pattern for near-real time exposure requirement → alerts surfaced through containment boundary initially; progressive mapping lifts signal upward toward canonical entities over time as business understanding deepens and jurisdictional requirements across all geographies fully mapped out first before adding complexity to Core semantic layer
+- "Change in circumstance" events tracked per entity (ownership changes, UBO updates, risk profile shifts) → triggers re-screening workflows automatically via Workflow Engine integration with Entitlement Platform enforcement of maker-checker resolution + SoD validation at each compliance checkpoint/gate/phase transition point before state change persists to Core ledger domain systems
+- Data classification rules built into ontology itself: sensitive fields (PEP flags, risk scores, source documentation references) have explicit metadata tags governing access patterns and exposure layer visibility controls per user role/entity scope boundaries defined by Entitlement Platform records stored separately from semantic layer but correlated through CIF-level entity hierarchy relationships maintained natively in Core model
+- Geographic scoping applies here too: jurisdictional requirements vary (FINTRAC Canada vs FinCEN US vs FCA UK) → ontology must capture regulatory domain per geography while maintaining unified client view across all jurisdictions simultaneously active on same corporate group structure like Nexus Global reference case study demonstrates
 
 ---
 
