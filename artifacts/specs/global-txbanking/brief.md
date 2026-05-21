@@ -1,8 +1,8 @@
 # Global Transaction Banking — Data Platform Brief
 
-**Author:** Daniel Maly  
-**Captured by:** Data Architect Agent  
-**Date:** 2026-05-21 (requirements gathered 2026-05-20)  
+**Lead Architect:** Daniel Maly
+**Author:** Daniel Maly, captured by Data Architect Agent
+**Dates:** Requirements sessions — 2026-05-20 and 2026-05-21 (Thursday)
 **Status:** Discovery  
 
 ---
@@ -64,6 +64,37 @@ Daniel will provision and own the Databricks environment. Architecture work focu
 | Data Exposure Patterns    | How data is served to consumers; APIs, streams, datasets   | Informed by ontology    |
 
 These are two distinct deliverables. The ontology should be able to opine on the exposure pattern — not dictate it directly.
+
+---
+
+## Data Strategy — Dual Containment Model
+
+### Core Principle
+Two distinct data domains with different governance, lifecycle, and evolution cadence. A containment boundary between them prevents uncontrolled diffusion while enabling rapid integration velocity.
+
+| Layer | Scope | Control Level | Evolution Cadence |
+|-------|-------|--------------|-------------------|
+| **Containment Model** (External) | Vendor system data feeds: Trade Finance vendor, Supply Chain Finance vendor, Cash Flow Forecasting tool. Third-party integrations we cannot easily control source schemas of | Low — adapt & absorb quickly; map progressively to Core over time | Quarantine zone that isolates external schema volatility from internal architecture |
+| **Core Model** (Internal) | Bank-owned systems: Core Ledger + Payments drive the data space. Canonical domain entities under our full lifecycle ownership | High — deliberate, progressive evolution as business understanding matures (~5 year horizon) | "True north" semantic layer; evolves at our pace, not driven by vendor change cycles |
+
+### Key Tension Being Solved
+Enable fast third-party integration + rapid time-to-value → **BUT contain data diffusion and fragmentation** while progressively defining the Core model.
+
+Without this boundary, every new vendor system pollutes the internal model with its own schema conventions — creating a fragmented mess that slows everything down over time. Containment absorbs; Core harmonizes.
+
+### Harmonization Governance
+This architecture work **IS** the harmonization engine. No separate team or parallel process needed:
+```
+Vendor System → Containment Zone ──(progressive mapping)──→ Common Ontology ← Core Systems
+                                                    ↑
+                                          The ontology definition drives alignment.
+```
+The common ontology serves dual role: (1) north star for canonical entities, and (2) progressive mapping target for containment zone feeds as business understanding matures.
+
+### ISO 20022 → Business Ontology Alignment *(Flagged — To Unpack)*
+ISO 20022 is the message-level standard for payments. It's technically rich but not business-intuitive at face value. The ontology layer should provide a **business-friendly abstraction** above it so consumers don't need to be ISO 20022 experts to work with payment data meaningfully.
+
+⚠️ This will become its own core tenet and deserves dedicated unpacking before Ontology artifact is drafted.
 
 ---
 
