@@ -91,10 +91,42 @@ Vendor System → Containment Zone ──(progressive mapping)──→ Common O
 ```
 The common ontology serves dual role: (1) north star for canonical entities, and (2) progressive mapping target for containment zone feeds as business understanding matures.
 
-### ISO 20022 → Business Ontology Alignment *(Flagged — To Unpack)*
-ISO 20022 is the message-level standard for payments. It's technically rich but not business-intuitive at face value. The ontology layer should provide a **business-friendly abstraction** above it so consumers don't need to be ISO 20022 experts to work with payment data meaningfully.
+---
 
-⚠️ This will become its own core tenet and deserves dedicated unpacking before Ontology artifact is drafted.
+## Core Tenets (Architectural Guardrails)
+
+These principles are non-negotiable. They guide all design decisions, ontology modeling choices, containment zone patterns, and exposure layer architecture.
+
+### Tenet 1 — Containment Model with Progressive Harmonization
+External vendor systems land in a quarantine/containment zone that isolates their schema volatility from the internal Core model. Time-to-value is fast because new integrations slot into containment immediately without waiting for canonical alignment. Over time, progressive mapping lifts signal upward toward Core entities as business understanding matures.
+
+The common ontology IS the harmonization engine — not a separate team or parallel process.
+
+### Tenet 2 *(Critical)* — Intent-First Ontology Rooted in Client Need
+**Top tier of the ontology = client intent.** What does the corporation need? What can we sell them that satisfies it?
+
+```
+Client Intent        ← Maya thinks here ("move money", "hedge exposure")
+      ↓
+Product/Service Offering  ← Bank sells this (Cash Pool, FX Forward)
+      ↓
+Technical Rail Selection   ← Geography + bank infrastructure resolves execution path 
+                             (ACH vs Fedwire vs Lynx vs CHAPS — invisible to client)
+      ↓
+Domain Execution         ← ISO messages hit the wire; ledger entries post
+```
+
+**Key properties:**
+- Client-facing consumers never see technical rail names. "Send $5M to Canada subsidiary" → platform resolves CAD → Lynx automatically.
+- **Correlation is maintained end-to-end.** Full traceability from intent through product selection down to domain execution (ISO 20022 payloads, ledger postings). Audit complete without forcing implementation details upward into business semantics.
+- Geography + rail availability = operational constraints that drive resolution logic. They are NOT ontology concepts themselves — they're metadata on the technical layer beneath client-facing abstractions.
+
+This tenet directly informs containment zone design: external vendor systems produce domain-level execution data (raw ISO messages, proprietary status codes). Containment absorbs them as-is; progressive mapping lifts signal upward through rail → product → intent layers over time until it lands in Core ontology terms that reflect what the client actually needed and received.
+
+### Tenet 3 *(Flagged)* — Business-Friendly Abstraction Above ISO 20022
+ISO 20022 is technically rich but not business-intuitive. The Top tier must present payment concepts at level of intent + execution status, NOT message-level fidelity. Technical rail selection and geography constraints are resolved automatically by the platform.
+
+⚠️ This tenet expands on Tenet #1 above once ISO 20022 → Business Ontology mapping patterns get fully unpacked.
 
 ---
 
