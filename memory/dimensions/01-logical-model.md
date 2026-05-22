@@ -5,8 +5,19 @@ Business semantics, entity definitions, product catalog, relationships as the ba
 
 ---
 
-## Current State (2026-05-21)
-Session recovered from git history + research artifacts after restart wipe. Full canonical graph spec exists at `artifacts/dimensions/01-logical-model/specs/canonical-graph-spec.md` (~32KB, 700 lines).
+## Current State (2026-05-22)
+Refocused to Nexus Global reference client. All ontology examples now use Maya's specific entities and products. Vendor-hosted constraint added for Trade Finance + Supply Chain Finance.
+
+### Reference Client: Nexus Global
+- **Corporate Structure:** Canada (HQ) → USA → USA-East + UK Ltd (4 entities)
+- **Product Codes:** PROD-003 (FX Forward CAD), PROD-004 (FX Hedge GBP), PROD-010 (DDA)
+- **Cash Pool:** Nexus Multi-Currency Pool (USA-East 35.5%, Canada 23.2%)
+- **Vendor-Hosted:** PROD-TF-001 (Trade Finance/LCs), PROD-SCF-001 (Supply Chain Finance/Reverse Factoring)
+
+### Vendor-Hosted Constraint `[VENDOR-HOSTED]`
+Trade Finance and Supply Chain Finance are vendor-hosted systems. Ontology serves as semantic integration layer over vendor schemas via Containment Zone with progressive mapping. New `VendorSystem` node type added (TradeFinanceSystem, SupplyChainFinanceSystem) with edges: `isHostedBy`, `isMappedTo`, `containmentStatus`.
+
+### Key Artifacts
 
 ### Entity Taxonomy (Committed — Node Types)
 ```
