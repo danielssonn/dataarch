@@ -3,7 +3,7 @@
 **Date:** 2026-05-22  
 **Status:** Draft  
 **Author:** Data Architect Agent  
-**Scope:** Physical store architecture, table design, Unity Catalog topology, pipeline architecture, and volume estimates for the GTB canonical platform.
+**Scope:** Physical store architecture, table design, cross-store synchronization, pipeline architecture, and volume estimates for the Nexus Global Transaction Banking Platform.
 
 ---
 
@@ -17,16 +17,16 @@ Materialization in this architecture has four distinct faces:
 
 | Face | What It Is | Consumer |
 |------|-----------|----------|
-| **Canonical persistence** | Physical tables storing the graph itself (nodes, edges, proof chains) | Entity Platform API (sole write path) |
+| **Canonical persistence** | Physical stores holding the graph itself (nodes, edges, proof chains) | Entity Platform API (sole write path) |
 | **Kinetic materialization** | Tables storing declared business operations (action types, instances, functions, rules) and their execution history | Action execution pipeline, pre-flight validators |
 | **Projection materialization** | LOB-scoped read-optimized views derived from canonical state | CB, CM, WM operational applications |
 | **Containment Zone** | Isolated tables for vendor schema data not yet mapped to canonical ontology terms | Vendor ingestion pipeline, progressive mapping service |
 
-This document covers canonical persistence, kinetic materialization, and containment zone design. Projection materialization is covered in the Unity Catalog topology section.
+This document covers canonical persistence across the three-tier store, kinetic materialization, and containment zone design. Projection materialization is covered in the Unity Catalog topology section.
 
 ### 1.2 How the Kinetic Layer Changes Materialization
 
-The pre-kinetic materialization design treated the graph as a static data catalog. The kinetic layer (§9 of the ontology spec) makes the ontology **operational** — three constructs that change materialization requirements:
+The kinetic layer (§9 of the ontology spec) makes the ontology **operational** — three constructs that change materialization requirements:
 
 1. **Interfaces** — polymorphic contracts (`IHasBalance`, `IIsSettlementTarget`, etc.) require an `interface_implementations` mapping table so the API can resolve "all settlement targets" without enumerating concrete node types.
 2. **Action Types** — declared business operations with pre-flight rules, effects, and governance modes require persistent storage of action type definitions, action instances (execution history), and the two-phase write state machine (`proposed_edges`, `review_queue`, `compensating_actions`).
@@ -44,426 +44,331 @@ Vendor-hosted systems (Trade Finance PROD-TF-001, Supply Chain Finance PROD-SCF-
 
 ## 2. Physical Store Architecture
 
-### 2.1 The Decision: Delta Lake Only (No Separate Graph DB)
+### 2.1 The Decision: Three-Tier Store (Neo4j + PostgreSQL + Delta Lake + Redis)
 
-The previous architecture spec (§11 Technology Options) recommended Neo4j for canonical graph + Databricks for analytical projections. The Architectural Impact Analysis flagged this as **critical ambiguity**: the DDL implementation is entirely Delta Lake, but the API contract implies real-time graph operations.
+The previous draft committed a "Delta Lake only" architecture. This was rejected. The correct architecture, grounded in the Palantir Foundry operational pattern and validated against Nexus Global's actual requirements, uses **four complementary stores**, each optimized for its access pattern:
 
-**Resolution: Single-store Delta Lake architecture.**
+| Layer | Store | Purpose |
+|-------|-------|---------|
+| **Graph Store** | Neo4j | Entity-relationship traversal, ownership chains, beneficial ownership queries, real-time graph mutations (<5ms p99) |
+| **RDBMS** | PostgreSQL | Kinetic layer — action instances, review queues, business rules, proof registry, mandates (ACID transactions) |
+| **Lakehouse** | Delta Lake (Databricks on Azure) | Analytics, temporal history, governance snapshots, containment zone, LOB projections |
+| **Cache** | Azure Cache for Redis | Hot operational paths (entitlements, mandate checks, active interface implementations) |
 
-#### Why Not Neo4j?
+### 2.2 Why Not Delta Lake Only?
 
-| Factor | Assessment |
-|--------|-----------|
-| **Volume** | ~200 customers Year 1, ~1,000 Year 5. Even with deep nesting (4 entities × ~10 products × ~100 virtual accounts), total node/edge count is ~5–8M — well within Delta Lake's operational query capability. |
-| **Latency requirement** | Sub-5ms entitlement checks target a very specific hot path (party → channel access). This is a **point lookup**, not a multi-hop graph traversal. A properly indexed Delta table or a thin hot cache handles this. |
-| **Synchronization burden** | Two-store requires CDC between Neo4j and Delta Lake. At this scale, the operational cost of maintaining consistency (eventual consistency windows, sync failure handling, dual-write semantics) outweighs the performance benefit. |
-| **Platform ownership** | Daniel owns the Databricks on Azure environment. Adding Neo4j introduces a new platform to provision, monitor, patch, and back up. |
-| **Append-only enforcement** | Delta Lake enforces `delta.appendOnly = true` at the storage layer. Neo4j would require application-layer enforcement, weakening the guarantee. |
-| **Unity Catalog governance** | RLS, column masking, and temporal auditability are native to the Delta Lake + Unity Catalog stack. Neo4j would need a separate governance layer. |
+The previous draft argued against Neo4j/PostgreSQL on these grounds — all refuted:
 
-#### Why Not PostgreSQL Either?
+| Previous Argument | Why It's Wrong |
+|-------------------|----------------|
+| "Volumes too modest (~28K nodes Y1) for separate graph DB" | Volume is irrelevant to the requirement. The question is **query pattern**, not row count. Multi-hop graph traversal (ownership chains, beneficial ownership) is fundamentally a graph problem. Doing it with SQL joins on Delta Lake is architecturally wrong regardless of scale. |
+| "Sub-5ms entitlement is a point lookup, not graph traversal" | Entitlement resolution is only one requirement. The API contract (Dimension 04) specifies `ownership-chain`, `beneficial-owners`, and `regulatory-exposure` traversals — these are multi-hop graph queries that must meet operational SLAs. |
+| "Two-store sync burden outweighs benefit" | This is the opposite of industry practice. Palantir Foundry, Stardog, and every serious graph platform use a dedicated graph store for operational traversal + a lakehouse for analytics. The sync layer is well-understood (CDC/change events), not a burden. |
+| "Adding platforms increases ops cost" | True, but the alternative is architecturally wrong. A correct architecture with two additional stores is better than an incorrect single-store architecture that can't meet the API contract's traversal requirements. |
+| "Delta Lake enforces append-only natively" | Append-only is a storage concern, not a query-pattern concern. PostgreSQL can enforce append-only via application constraints + triggers. The benefit of Delta Lake's native enforcement applies to the Delta Lake tables, not the graph store. |
 
-- No native append-only enforcement (relies on application-level constraints)
-- No temporal time-travel (Delta Lake's `TIMESTAMP AS OF` is a killer feature for point-in-time queries)
-- No Unity Catalog integration (RLS, column masking, grant management would be application-layer)
-- Databricks is already locked — adding PostgreSQL duplicates the operational platform without clear benefit
+### 2.3 Store Responsibilities
 
-### 2.2 Recommended Architecture: Delta Lake + Hot Cache
+#### Neo4j — Graph Store (Operational Traversal)
+
+The canonical graph's nodes and edges live here for **real-time graph operations**:
+
+- Entity resolution by ID/LEI
+- Relationship traversal (ownership chains, beneficial ownership, regulatory exposure)
+- Real-time graph mutations (create/update/suspend nodes and edges)
+- Interface implementation queries ("all settlement targets")
+- Multi-hop pathfinding for compliance screening
+
+**Why Neo4j:** Native graph storage with indexed-free traversal. Sub-millisecond multi-hop queries regardless of graph size. Cypher query language maps directly to the API contract's traversal endpoints. Mature enterprise support on Azure.
+
+**Data:** All node types (Party, EntityGroup, Product, Account, Transaction, Channel, Obligation, Mandate, VendorSystem) and all edge types. Current state only (latest version of each node/edge).
+
+#### PostgreSQL — RDBMS (Kinetic Layer + Proof Registry)
+
+The kinetic layer and proof registry require **ACID transactional semantics** that Delta Lake cannot provide:
+
+- Action type definitions and execution history
+- Business rules and function definitions
+- Review queue with ordered processing
+- Proposed edges (two-phase write)
+- Compensating actions
+- Proof chains and proof records (append-only with hash chaining)
+- Mandate state and delegation chains
+
+**Why PostgreSQL:** ACID transactions for the two-phase write state machine. Native append-only enforcement via triggers. Efficient ordered access for review queues and hash chains. No time-travel needed — these tables are operational, not analytical.
+
+**Data:** All kinetic layer tables (9 tables), proof registry (2 tables), mandate state.
+
+#### Delta Lake — Lakehouse (Analytics + History)
+
+Delta Lake retains its role for **analytical workloads** where it excels:
+
+- Temporal history of all graph state changes (time-travel queries)
+- LOB projection catalogs (`tb_cb`, `tb_cm`, `tb_wm`)
+- Containment zone data
+- Canonical KPIs and metrics
+- Governance snapshots
+- Batch analytics (proof integrity sweeps, KPI computation)
+
+**Why Delta Lake:** Native time-travel for point-in-time queries (`?asOf={timestamp}`). Change Data Feed for pipeline triggering. Unity Catalog governance (RLS, column masking, grants). Liquid Clustering for analytical query optimization. Already owned (Databricks on Azure).
+
+**Data:** Historical snapshots of nodes/edges (synced from Neo4j via CDC). LOB projection tables. Containment zone. Metrics.
+
+#### Azure Cache for Redis — Hot Cache
+
+A thin read-through cache for the **hottest operational paths**:
+
+| Cached Data | Source Store | Purpose | Cache Strategy |
+|-------------|-------------|---------|----------------|
+| Active entitlements (party → channel access) | PostgreSQL | <5ms entitlement check | Write-through on change; TTL 5min |
+| Active agent mandates | PostgreSQL | <1ms pre-flight validation | Write-through on change; TTL 1min |
+| Interface implementations | PostgreSQL | Polymorphic resolution | Static cache (refreshed on ontology change) |
+| Hot node lookups (by LEI) | Neo4j | Fast entity resolution | Write-through on change; TTL 10min |
+
+**Critical design rule:** Cache is **never** the source of truth. Cache miss → fall through to the owning store (sub-10ms for PostgreSQL, sub-5ms for Neo4j). Cache is an optimization, not a dependency.
+
+### 2.4 Architecture Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                    Entity Platform API                            │
-│              (Sole write path + read orchestration)               │
-└──────────────┬──────────────────────────┬────────────────────────┘
-               │                          │
-    ┌──────────▼──────────┐      ┌────────▼────────┐
-    │  Delta Lake (Azure) │      │  Hot Cache       │
-    │  Unity Catalog      │      │  (Azure Cache    │
-    │                     │      │   for Redis)     │
-    │ • Canonical graph   │◀─────┤                  │
-    │ • Proof registry    │      │ • Entitlements   │
-    │ • Kinetic layer     │      │ • Mandate state  │
-    │ • Containment zone  │      │ • Active edges   │
-    │ • LOB projections   │      │   (hot subset)   │
-    └──────────┬──────────┘      └──────────────────┘
-               │
-    ┌──────────▼──────────┐
-    │  Databricks Compute │
-    │                     │
-    │ • Batch pipelines   │
-    │ • CDF-triggered     │
-    │ • KPI computation   │
-    │ • Integrity sweeps  │
-    └─────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                    Entity Platform API                                │
+│              (Sole write path + read orchestration)                   │
+└──┬──────────┬──────────────┬───────────────┬─────────────────────────┘
+   │          │              │               │
+   │          │              │               │
+┌──▼──────┐ ┌─▼────────┐ ┌──▼──────────┐ ┌──▼──────────────┐
+│ Neo4j   │ │PostgreSQL│ │Delta Lake   │ │Azure Cache      │
+│ (Graph) │ │(Kinetic+ │ │(Analytics+  │ │for Redis        │
+│         │ │ Proof)   │ │ History)    │ │(Hot Cache)      │
+│         │ │          │ │             │ │                 │
+│ • Nodes │ │• kinetic │ │ • History   │ │ • Entitlements  │
+│ • Edges │ │  (9 tbls)│ │ • LOB proj  │ │ • Mandates      │
+│ • Index │ │• proof   │ │ • Contain.  │ │ • Interface impl│
+│   free  │ │  (2 tbls)│ │   zone      │ │ • Hot nodes     │
+│ travers │ │• mandates│ │ • Metrics   │ │                 │
+│ al      │ │          │ │             │ │◄────────────────│
+└────┬────┘ └────┬─────┘ └──────┬──────┘  │cache miss     │
+     │           │              │          └───────────────┘
+     │           │              │
+     │     ┌─────▼──────┐      │
+     │     │Databricks   │      │
+     │     │Compute      │      │
+     │     │             │      │
+     │     │• Batch      │      │
+     │     │  pipelines  │      │
+     │     │• CDF-       │      │
+     │     │  triggered  │      │
+     │     │• KPI        │      │
+     │     │  computation│      │
+     │     └─────────────┘      │
+     │                          │
+     │           ┌──────────────▼──────────────┐
+     │           │   Cross-Store Sync Layer     │
+     │           │                              │
+     │           │ Neo4j→Delta: CDC on graph    │
+     │           │ changes → historical snapshot│
+     │           │                              │
+     │           │ PostgreSQL→Redis: write-     │
+     │           │ through cache invalidation   │
+     │           │                              │
+     │           │ Neo4j→Redis: hot node cache  │
+     │           └──────────────────────────────┘
 ```
 
-#### Delta Lake — Canonical Persistence
+### 2.5 Cross-Store Synchronization
 
-All canonical state lives here: nodes, edges, proof chains, kinetic layer tables, containment zone tables, and LOB projections. This is the **system of record**.
+The sync layer ensures consistency across stores:
 
-**Strengths:**
-- Append-only enforcement at storage layer (`delta.appendOnly = true`)
-- Native time-travel for point-in-time queries
-- Change Data Feed for pipeline triggering
-- Liquid Clustering for query optimization without manual partitioning
-- Unity Catalog governance (RLS, column masking, grants)
-- Single platform (Databricks on Azure — already owned)
+| Sync Path | Trigger | Mechanism | Latency |
+|-----------|---------|-----------|---------|
+| Neo4j → Delta Lake | Graph mutation (create/update/suspend) | CDC via Neo4j APOC trigger → Event Grid → Databricks Job | Near-real-time (<5s) |
+| PostgreSQL → Redis | Kinetic/mandate state change | Write-through cache invalidation via pub/sub | Sub-millisecond |
+| Neo4j → Redis | Hot node created/updated | Write-through cache invalidation | Sub-millisecond |
+| Delta Lake → Neo4j | **None** | Delta Lake is never the source of truth for current graph state | N/A |
 
-#### Hot Cache — Sub-Millisecond Operational Path
+**Consistency guarantee:** Neo4j and PostgreSQL are the sources of truth for their respective data. Delta Lake historical snapshots are eventually consistent (lag <5s). Redis cache is eventually consistent (write-through invalidation).
 
-A thin read-through cache (Azure Cache for Redis) for the **hot subset** requiring sub-5ms access:
-
-| Cached Data | Purpose | Cache Strategy |
-|------------|---------|---------------|
-| Active entitlements (party → channel access) | <5ms entitlement check | Write-through on change; TTL 5min |
-| Active agent mandates | <1ms pre-flight validation | Write-through on change; TTL 1min |
-| Active edges for hot entities | Fast relationship queries | Write-through on change; TTL 10min |
-| Interface implementations | Polymorphic resolution | Static cache (refreshed on ontology change) |
-
-**Why Redis?** Structured data support (hashes, sets), pub/sub for cache invalidation, managed Azure Cache for Redis integrates with Databricks workspace VNet, sub-millisecond latency for cache hits.
-
-**Critical design rule:** Cache is **never** the source of truth. Cache miss → fall through to Delta Lake (~10-50ms for the miss, correctness preserved). Cache is an optimization, not a dependency.
-
-### 2.3 Liquid Clustering Strategy
-
-| Table | Cluster Columns | Dominant Query Pattern |
-|-------|----------------|----------------------|
-| `entity.nodes` | `(type, state, lei)` | UBO/ownership chain by type + LEI join |
-| `entity.edges` | `(type, from_node_id, state)` | Graph traversal from a known node |
-| `proof.proof_chains` | `(edge_id, integrity_status)` | Integrity sweep + edge lookup |
-| `proof.proof_records` | `(chain_id, sequence)` | Full chain replay in order |
-| `product.nodes` | `(type, state, product_code)` | Product lookup by code + type |
-| `account.nodes` | `(type, state, owner_id)` | Account lookup by owner |
-| `transaction.nodes` | `(type, state, settled_account_id, created_at)` | Transaction history by account + time |
-| `channel.entitlements` | `(party_id, channel_type, state)` | Entitlement lookup by party |
-| `channel.mandates` | `(agent_id, state)` | Mandate pre-flight check |
-| `kinetic.action_instances` | `(action_type_id, status, created_at)` | Action history by type + time |
-| `kinetic.proposed_edges` | `(review_status, created_at)` | Review queue ordering |
-| `kinetic.function_definitions` | `(name, version)` | Function resolution by name + version |
-| `kinetic.business_rules` | `(action_type_id, rule_name)` | Rule evaluation for pre-flight |
-| `containment.vendor_systems` | `(vendor_id, state)` | Vendor system lookup |
-| `containment.vendor_mapping_status` | `(vendor_field_ref, mapping_status)` | Mapping progress tracking |
+**Failure handling:** If sync fails, the CDC event is retried with exponential backoff. If retry exhausts, alert to operations. The source store remains correct; only the derived store (Delta Lake history / Redis cache) is stale.
 
 ---
 
-## 3. Table Design (Delta Lake / Unity Catalog)
+## 3. Table Design
 
-### 3.1 Catalog: `tb_canonical` — Schema: `entity`
+### 3.1 Neo4j — Graph Store Schema
 
-#### `entity.nodes`
+#### Node Labels
 
-Append-only node table. Current state derived via `ROW_NUMBER()` in `current_nodes` view.
+```cypher
+// Party hierarchy
+(:LegalEntity)
+(:NaturalPerson)
+(:FinancialInstitution)
+(:Regulator)
+(:Party)  // super-label
 
-```sql
-CREATE TABLE tb_canonical.entity.nodes (
-    id STRING,                       -- UUID v4
-    type STRING,                     -- node type enum (LegalEntity, OperatingAccount, etc.)
-    lei STRING,                      -- LEI where applicable
-    canonical_name STRING,
-    aliases ARRAY<STRING>,
-    created_at TIMESTAMP,
-    created_by STRING,               -- ActorRef
-    state STRING,                    -- Active | Suspended | Terminated | Disputed
-    domain_extensions STRUCT<
-        cb: MAP<STRING, STRING>,
-        cm: MAP<STRING, STRING>,
-        wm: MAP<STRING, STRING>
-    >,
-    proof_chain_id STRING,           -- FK to proof.proof_chains (NOT NULL)
-    updated_at TIMESTAMP             -- for ROW_NUMBER() ordering
-)
-TBLPROPERTIES (
-    'delta.appendOnly' = 'true',
-    'delta.enableChangeDataFeed' = 'true'
-)
-CLUSTER BY (type, state, lei);
+// Entity groups
+(:EntityGroup)
+(:UltimateParent)
+(:ConsolidatedGroup)
+
+// Product hierarchy
+(:ProductDefinition)
+(:ProductInstance)
+(:ProductBundle)
+
+// Account types
+(:OperatingAccount)
+(:VirtualAccount)
+(:NotionalPool)
+(:PhysicalPool)
+(:TradingAccount)
+(:CustodyAccount)
+
+// Transaction types
+(:Payment)
+(:TradeTransaction)
+(:FXTransaction)
+(:Fee)
+(:InterestPosting)
+(:SweepTransaction)
+(:Reversal)
+
+// Channel types
+(:DigitalPortal)
+(:APIChannel)
+(:H2HChannel)
+(:SWIFTChannel)
+
+// Obligations
+(:RegulatoryObligation)
+(:ContractualObligation)
+(:CreditObligation)
+(:SettlementObligation)
+
+// Mandates
+(:HumanMandate)
+(:AgentMandate)
+
+// Vendor systems
+(:VendorSystem)
+(:TradeFinanceSystem)
+(:SupplyChainFinanceSystem)
 ```
 
-#### `entity.edges`
+#### Core Node Properties
 
-Append-only edge table. Current state derived via `ROW_NUMBER()` in `current_edges` view.
+```cypher
+// All nodes share these properties
+(id: STRING)           -- UUID v4, primary identifier
+(lei: STRING)          -- LEI where applicable
+(canonicalName: STRING)
+(aliases: LIST<STRING>)
+(state: STRING)        -- Active | Suspended | Terminated | Disputed
+(createdBy: STRING)    -- ActorRef
+(domainScope: LIST<STRING>)  -- CB | CM | WM | ALL (RLS enforcement)
 
-```sql
-CREATE TABLE tb_canonical.entity.edges (
-    id STRING,                       -- UUID v4
-    type STRING,                     -- edge type enum (owns, isSubsidiaryOf, etc.)
-    from_node_id STRING,             -- FK to entity.nodes.id
-    to_node_id STRING,               -- FK to entity.nodes.id
-    state STRING,                    -- Proposed | Verified | Active | Suspended | Terminated | Disputed
-    effective_from TIMESTAMP,
-    effective_to TIMESTAMP,
-    created_at TIMESTAMP,
-    created_by STRING,
-    proof_chain_id STRING,           -- FK to proof.proof_chains (NOT NULL)
-    domain_scope ARRAY<STRING>,      -- CB | CM | WM | ALL (RLS enforcement point)
-    containment_zone BOOLEAN,        -- true if vendor-origin edge
-    mapping_status STRING,           -- Partial | Complete (vendor edges only)
-    vendor_schema_ref STRING,        -- original vendor field reference
-    mapped_at TIMESTAMP,             -- last mapping update
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES (
-    'delta.appendOnly' = 'true',
-    'delta.enableChangeDataFeed' = 'true'
-)
-CLUSTER BY (type, from_node_id, state);
+// Domain-specific extensions stored as maps
+(domainExtensions: MAP)  -- {cb: {...}, cm: {...}, wm: {...}}
 ```
 
-#### Views
+#### Relationship Types
 
-```sql
--- Current state view (latest row per id)
-CREATE OR REPLACE VIEW tb_canonical.entity.current_nodes AS
-SELECT * FROM (
-    SELECT *,
-        ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) AS rn
-    FROM tb_canonical.entity.nodes
-) WHERE rn = 1;
+```cypher
+// Ownership / hierarchy
+(:LegalEntity)-[:IS_SUBSIDIARY_OF]->(:LegalEntity)
+(:LegalEntity)-[:OWNS]->(:Account)
+(:NaturalPerson)-[:HAS_SIGNING_AUTHORITY]->(:Account)
 
--- Current edges with RLS
-CREATE OR REPLACE VIEW tb_canonical.entity.current_edges AS
-SELECT * FROM (
-    SELECT *,
-        ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) AS rn
-    FROM tb_canonical.entity.edges
-) WHERE rn = 1
-  AND (array_contains(domain_scope, current_lob()) OR array_contains(domain_scope, 'ALL'));
+// Product / subscription
+(:Party)-[:IS_SUBSCRIBED_TO]->(:ProductInstance)
+(:ProductInstance)-[:IS_PART_OF]->(:ProductBundle)
+
+// Pool membership
+(:Account)-[:IS_PART_OF]->(:NotionalPool)
+(:Account)-[:IS_PART_OF]->(:PhysicalPool)
+
+// Balance / settlement
+(:Account)-[:HAS_BALANCE]->(:Account)
+(:Account)-[:SETTLES_Against]->(:Account)
+
+// KYC / compliance
+(:Party)-[:IS_KNOWN_BY]->(:Regulator)
+(:Party)-[:IS_SCREENED_AGAINST]->(:RegulatoryObligation)
+(:Party)-[:IS_SUBJECT_TO]->(:RegulatoryObligation)
+
+// Mandate
+(:Party)-[:OPERATES_UNDER]->(:Mandate)
+(:Mandate)-[:DELEGATED_FROM]->(:Mandate)
+
+// Vendor hosting
+(:ProductInstance)-[:IS_HOSTED_BY]->(:VendorSystem)
 ```
 
-### 3.2 Catalog: `tb_canonical` — Schema: `proof`
+#### Indexes
 
-#### `proof.proof_chains`
+```cypher
+// Primary lookups
+CREATE INDEX FOR (n:LegalEntity) ON (n.id);
+CREATE INDEX FOR (n:LegalEntity) ON (n.lei);
+CREATE INDEX FOR (n:NaturalPerson) ON (n.id);
+CREATE INDEX FOR (n:NaturalPerson) ON (n.lei);
+CREATE INDEX FOR (n:ProductInstance) ON (n.id);
+CREATE INDEX FOR (n:ProductInstance) ON (n.productCode);
+CREATE INDEX FOR (n:OperatingAccount) ON (n.id);
+CREATE INDEX FOR (n:VirtualAccount) ON (n.id);
+CREATE INDEX FOR (n:Channel) ON (n.id);
+CREATE INDEX FOR (n:Channel) ON (n.type);
 
-```sql
-CREATE TABLE tb_canonical.proof.proof_chains (
-    id STRING,                       -- UUID v4
-    edge_id STRING,                  -- FK to entity.edges.id
-    current_state STRING,            -- derived from event replay
-    integrity_status STRING,         -- Valid | Challenged | Broken | Expired
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES (
-    'delta.appendOnly' = 'true',
-    'delta.enableChangeDataFeed' = 'true'
-)
-CLUSTER BY (edge_id, integrity_status);
+// Relationship traversal optimization
+CREATE INDEX FOR ()-[r:IS_SUBSIDIARY_OF]-() ON START_NODE, END_NODE;
+CREATE INDEX FOR ()-[r:OWNS]-() ON START_NODE, END_NODE;
+CREATE INDEX FOR ()-[r:IS_SUBSCRIBED_TO]-() ON START_NODE, END_NODE;
+CREATE INDEX FOR ()-[r:IS_PART_OF]-() ON START_NODE, END_NODE;
+CREATE INDEX FOR ()-[r:OPERATES_UNDER]-() ON START_NODE, END_NODE;
 ```
 
-#### `proof.proof_records`
+#### Key Queries (API Contract Alignment)
 
-```sql
-CREATE TABLE tb_canonical.proof.proof_records (
-    id STRING,                       -- UUID v4
-    chain_id STRING,                 -- FK to proof.proof_chains.id
-    sequence LONG,                   -- monotonically increasing within chain
-    event STRING,                    -- PROOF_ASSERTED | PROOF_VERIFIED | etc.
-    proof_type STRING,               -- declarative | behavioural | delegated | agentic | systemic | regulatory
-    intent_summary STRING,
-    intent_payload STRING,           -- JSON blob (column-masked for non-auditors)
-    actor_id STRING,
-    actor_type STRING,               -- Human | System | Agent
-    authority_basis STRING,
-    entitlement_snapshot_id STRING,
-    channel_type STRING,
-    session_ref STRING,
-    asserted_at TIMESTAMP,
-    verified_at TIMESTAMP,
-    expires_at TIMESTAMP,
-    hash STRING,                     -- SHA-256 of record content
-    previous_hash STRING,            -- hash of prior record (tamper-evident chain)
-    signature STRING,                -- cryptographic signature (column-masked)
-    created_at TIMESTAMP
-)
-TBLPROPERTIES (
-    'delta.appendOnly' = 'true',
-    'delta.enableChangeDataFeed' = 'true'
-)
-CLUSTER BY (chain_id, sequence);
+```cypher
+// Ownership chain (Dimension 04 API: GET /entities/{id}/ownership-chain)
+MATCH path = (entity:LegalEntity {id: $entityId})-[:IS_SUBSIDIARY_OF*1..5]->(parent:LegalEntity)
+RETURN path
+ORDER BY length(path)
+
+// Beneficial owners (Dimension 04 API: GET /entities/{id}/beneficial-owners)
+MATCH (entity:LegalEntity {id: $entityId})
+MATCH path = (owner:NaturalPerson)-[:OWNS|IS_SUBSIDIARY_OF*1..5]->(entity)
+WHERE owner.state = 'Active'
+RETURN owner.id, owner.canonicalName, owner.lei, length(path) AS depth
+
+// Regulatory exposure (Dimension 04 API: GET /entities/{id}/regulatory-exposure)
+MATCH (entity:Party {id: $entityId})
+MATCH (entity)-[:IS_SCREENED_AGAINST|IS_SUBJECT_TO]->(obligation:RegulatoryObligation)
+RETURN obligation.id, obligation.type, obligation.jurisdiction
+
+// Interface resolution: all settlement targets
+MATCH (n)-[:HAS_BALANCE|SETTLES_Against]->()
+WHERE n.state = 'Active'
+RETURN DISTINCT labels(n) AS nodeType, count(*) AS count
 ```
 
-#### Masked View (Column-Level Security)
+### 3.2 PostgreSQL — Kinetic Layer + Proof Registry
 
-```sql
-CREATE OR REPLACE VIEW tb_canonical.proof.proof_records_masked AS
-SELECT
-    id, chain_id, sequence, event, proof_type, intent_summary,
-    CASE WHEN current_role() IN ('auditor', 'proof_registry_reader')
-         THEN intent_payload ELSE NULL END AS intent_payload,
-    actor_id, actor_type, authority_basis,
-    asserted_at, verified_at, expires_at, hash, previous_hash,
-    CASE WHEN current_role() IN ('auditor', 'proof_registry_reader')
-         THEN signature ELSE NULL END AS signature
-FROM tb_canonical.proof.proof_records;
-```
+#### Schema: `kinetic`
 
-### 3.3 Catalog: `tb_canonical` — Schema: `product`
-
-```sql
-CREATE TABLE tb_canonical.product.nodes (
-    id STRING,
-    type STRING,                     -- ProductDefinition | ProductInstance | ProductBundle
-    product_code STRING,             -- e.g., PROD-003, PROD-TF-001
-    canonical_name STRING,
-    aliases ARRAY<STRING>,
-    created_at TIMESTAMP,
-    created_by STRING,
-    state STRING,
-    domain_extensions STRUCT<cb: MAP<STRING, STRING>, cm: MAP<STRING, STRING>, wm: MAP<STRING, STRING>>,
-    proof_chain_id STRING,
-    hosting_model STRING,            -- Core | Vendor-Hosted
-    vendor_system_id STRING,         -- FK to containment.vendor_systems (if Vendor-Hosted)
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES (
-    'delta.appendOnly' = 'true',
-    'delta.enableChangeDataFeed' = 'true'
-)
-CLUSTER BY (type, state, product_code);
-```
-
-### 3.4 Catalog: `tb_canonical` — Schema: `account`
-
-```sql
-CREATE TABLE tb_canonical.account.nodes (
-    id STRING,
-    type STRING,                     -- OperatingAccount | VirtualAccount | NotionalPool | PhysicalPool
-    canonical_name STRING,
-    owner_id STRING,                 -- FK to entity.nodes (LegalEntity)
-    currency STRING,
-    created_at TIMESTAMP,
-    created_by STRING,
-    state STRING,
-    domain_extensions STRUCT<cb: MAP<STRING, STRING>, cm: MAP<STRING, STRING>, wm: MAP<STRING, STRING>>,
-    proof_chain_id STRING,
-    pool_weight DECIMAL(10, 4),      -- e.g., 35.5 for USA-East in Nexus pool
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES (
-    'delta.appendOnly' = 'true',
-    'delta.enableChangeDataFeed' = 'true'
-)
-CLUSTER BY (type, state, owner_id);
-```
-
-### 3.5 Catalog: `tb_canonical` — Schema: `transaction`
-
-```sql
-CREATE TABLE tb_canonical.transaction.nodes (
-    id STRING,
-    type STRING,                     -- Payment | TradeTransaction | FXTransaction | Fee | InterestPosting | SweepTransaction | Reversal
-    canonical_name STRING,
-    amount DECIMAL(18, 4),
-    currency STRING,
-    settled_account_id STRING,       -- FK to account.nodes
-    initiated_by_id STRING,          -- FK to entity.nodes
-    executed_via_channel_id STRING,  -- FK to channel.nodes
-    created_at TIMESTAMP,
-    created_by STRING,
-    state STRING,
-    proof_chain_id STRING,
-    domain_scope ARRAY<STRING>,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES (
-    'delta.appendOnly' = 'true',
-    'delta.enableChangeDataFeed' = 'true'
-)
-CLUSTER BY (type, state, settled_account_id, created_at);
-```
-
-### 3.6 Catalog: `tb_canonical` — Schema: `channel`
-
-#### `channel.nodes`
-
-```sql
-CREATE TABLE tb_canonical.channel.nodes (
-    id STRING,
-    type STRING,                     -- DigitalPortal | APIChannel | H2HChannel | SWIFTChannel
-    canonical_name STRING,
-    created_at TIMESTAMP,
-    state STRING,
-    proof_chain_id STRING,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true');
-```
-
-#### `channel.entitlements`
-
-```sql
-CREATE TABLE tb_canonical.channel.entitlements (
-    id STRING,
-    party_id STRING,                 -- FK to entity.nodes
-    channel_type STRING,             -- FK to channel.nodes.type
-    permissions ARRAY<STRING>,       -- e.g., ["accounts:read", "payments:initiate"]
-    created_at TIMESTAMP,
-    created_by STRING,
-    state STRING,                    -- Active | Suspended | Revoked
-    proof_chain_id STRING,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')
-CLUSTER BY (party_id, channel_type, state);
-```
-
-#### `channel.entitlement_snapshots`
-
-Point-in-time captures of entitlement state (for authority basis linkage in proof records).
-
-```sql
-CREATE TABLE tb_canonical.channel.entitlement_snapshots (
-    id STRING,                       -- referenced by proof_records.entitlement_snapshot_id
-    party_id STRING,
-    channel_type STRING,
-    permissions ARRAY<STRING>,
-    captured_at TIMESTAMP,
-    expires_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true');
-```
-
-#### `channel.mandates`
-
-```sql
-CREATE TABLE tb_canonical.channel.mandates (
-    id STRING,
-    type STRING,                     -- HumanMandate | SystemMandate | AgentMandate
-    agent_id STRING,
-    parent_mandate_id STRING,        -- FK to channel.mandates.id (delegation chain)
-    root_mandate_id STRING,          -- FK to channel.mandates.id (HumanMandate root)
-    permitted_operations ARRAY<STRING>,
-    limits STRUCT<max_amount: DECIMAL(18, 4), currency: STRING>,
-    constraints ARRAY<STRING>,
-    effective_from TIMESTAMP,
-    effective_to TIMESTAMP,
-    state STRING,                    -- Active | Suspended | Revoked
-    created_at TIMESTAMP,
-    proof_chain_id STRING,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')
-CLUSTER BY (agent_id, state);
-```
-
-### 3.7 Catalog: `tb_canonical` — Schema: `kinetic`
-
-**New schema** introduced by the kinetic layer (§9 of the ontology spec).
-
-#### `kinetic.interfaces`
+##### `kinetic.interfaces`
 
 Polymorphic interface definitions.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.interfaces (
-    name STRING,                     -- e.g., "IHasBalance", "IIsSettlementTarget"
-    required_properties ARRAY<STRING>,
-    required_edges ARRAY<STRING>,
-    description STRING,
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true');
+CREATE TABLE kinetic.interfaces (
+    name VARCHAR(128) PRIMARY KEY,
+    required_properties JSONB NOT NULL DEFAULT '[]',
+    required_edges JSONB NOT NULL DEFAULT '[]',
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
 **Seed data:**
@@ -479,17 +384,17 @@ TBLPROPERTIES ('delta.appendOnly' = 'true');
 | `IIsPoolMember` | `[]` | `["isPartOf"]` |
 | `IHasMandate` | `[]` | `["operatesUnder"]` |
 
-#### `kinetic.interface_implementations`
+##### `kinetic.interface_implementations`
 
 Maps interfaces to concrete node types.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.interface_implementations (
-    interface_name STRING,           -- FK to kinetic.interfaces.name
-    node_type STRING,                -- e.g., "OperatingAccount"
-    created_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true');
+CREATE TABLE kinetic.interface_implementations (
+    interface_name VARCHAR(128) REFERENCES kinetic.interfaces(name),
+    node_type VARCHAR(128) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (interface_name, node_type)
+);
 ```
 
 **Seed data (partial):**
@@ -502,25 +407,24 @@ TBLPROPERTIES ('delta.appendOnly' = 'true');
 | `IIsPoolMember` | `OperatingAccount`, `VirtualAccount` |
 | `IHasMandate` | `NaturalPerson`, `AgentMandate` |
 
-#### `kinetic.action_types`
+##### `kinetic.action_types`
 
 Declared business operation definitions.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.action_types (
-    id STRING,                       -- unique action identifier
-    name STRING,                     -- e.g., "AssertRelationship", "InitiatePayment"
-    description STRING,
-    version STRING,                  -- semantic version
-    inputs ARRAY<STRUCT<name: STRING, type: STRING, required: BOOLEAN>>,
-    pre_flight_rules ARRAY<STRING>,  -- references to kinetic.business_rules.id
-    effects ARRAY<STRUCT<type: STRING, target: STRING, details: STRING>>,
-    permissions ARRAY<STRING>,
-    governance_mode STRING,          -- immediate | proposed | reviewed
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true');
+CREATE TABLE kinetic.action_types (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(256) NOT NULL,
+    description TEXT,
+    version VARCHAR(32) NOT NULL,
+    inputs JSONB NOT NULL DEFAULT '[]',
+    pre_flight_rules JSONB NOT NULL DEFAULT '[]',
+    effects JSONB NOT NULL DEFAULT '[]',
+    permissions JSONB NOT NULL DEFAULT '[]',
+    governance_mode VARCHAR(32) NOT NULL CHECK (governance_mode IN ('immediate', 'proposed', 'reviewed')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
 **Seed data (Nexus Global):**
@@ -534,51 +438,53 @@ TBLPROPERTIES ('delta.appendOnly' = 'true');
 | `ACT-005` | `DrawdownIntercompanyFacility` | `reviewed` |
 | `ACT-006` | `InitiatePayment` | `immediate` |
 
-#### `kinetic.action_instances`
+##### `kinetic.action_instances`
 
 Execution history of actions. Every action invocation produces a row.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.action_instances (
-    id STRING,                       -- UUID v4
-    action_type_id STRING,           -- FK to kinetic.action_types.id
-    actor_id STRING,
-    actor_type STRING,               -- Human | System | Agent
-    inputs STRING,                   -- JSON: input parameters
-    status STRING,                   -- pending | pre_flight_failed | executing | completed | compensated
-    governance_mode STRING,          -- immediate | proposed | reviewed
-    review_status STRING,            -- pending_review | approved | rejected
-    review_by STRING,
-    review_at TIMESTAMP,
-    effects_applied STRING,          -- JSON: what graph mutations occurred
-    proof_records_created ARRAY<STRING>,  -- FK to proof.proof_records.id
-    error_message STRING,
-    created_at TIMESTAMP,
-    completed_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')
-CLUSTER BY (action_type_id, status, created_at);
+CREATE TABLE kinetic.action_instances (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    action_type_id VARCHAR(64) REFERENCES kinetic.action_types(id),
+    actor_id VARCHAR(256) NOT NULL,
+    actor_type VARCHAR(32) NOT NULL CHECK (actor_type IN ('Human', 'System', 'Agent')),
+    inputs JSONB,
+    status VARCHAR(32) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'pre_flight_failed', 'executing', 'completed', 'compensated')),
+    governance_mode VARCHAR(32),
+    review_status VARCHAR(32),
+    review_by VARCHAR(256),
+    review_at TIMESTAMPTZ,
+    effects_applied JSONB,
+    proof_records_created UUID[],
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_action_instances_type_status ON kinetic.action_instances (action_type_id, status, created_at);
+CREATE INDEX idx_action_instances_governance ON kinetic.action_instances (governance_mode, review_status);
 ```
 
-#### `kinetic.function_definitions`
+##### `kinetic.function_definitions`
 
 Versioned business logic units.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.function_definitions (
-    id STRING,
-    name STRING,                     -- e.g., "deriveEdgeState", "validateMandateScope"
-    description STRING,
-    version STRING,                  -- semantic version
-    inputs ARRAY<STRUCT<name: STRING, type: STRING>>,
-    output_type STRING,
-    logic STRING,                   -- business rule expression or code reference
-    dependencies ARRAY<STRING>,      -- FK to kinetic.function_definitions.name
-    audit_level STRING,              -- none | log | full
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true');
+CREATE TABLE kinetic.function_definitions (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(256) NOT NULL,
+    description TEXT,
+    version VARCHAR(32) NOT NULL,
+    inputs JSONB NOT NULL DEFAULT '[]',
+    output_type VARCHAR(128),
+    logic TEXT,
+    dependencies VARCHAR(64)[],
+    audit_level VARCHAR(16) NOT NULL DEFAULT 'none'
+        CHECK (audit_level IN ('none', 'log', 'full')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
 **Seed data:**
@@ -592,89 +498,294 @@ TBLPROPERTIES ('delta.appendOnly' = 'true');
 | `FUNC-005` | `computePoolInterest` | `1.0.0` | `full` |
 | `FUNC-006` | `validateTransferPricing` | `1.0.0` | `full` |
 
-#### `kinetic.business_rules`
+##### `kinetic.business_rules`
 
 Individual pre-flight rules referenced by action types.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.business_rules (
-    id STRING,
-    name STRING,
-    action_type_id STRING,           -- FK to kinetic.action_types.id (nullable for shared rules)
-    description STRING,
-    expression STRING,               -- rule expression (compiled to graph query)
-    function_id STRING,              -- FK to kinetic.function_definitions.id
-    severity STRING,                 -- blocking | warning | informational
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true')
-CLUSTER BY (action_type_id, name);
+CREATE TABLE kinetic.business_rules (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(256) NOT NULL,
+    action_type_id VARCHAR(64) REFERENCES kinetic.action_types(id),
+    description TEXT,
+    expression TEXT NOT NULL,
+    function_id VARCHAR(64) REFERENCES kinetic.function_definitions(id),
+    severity VARCHAR(16) NOT NULL CHECK (severity IN ('blocking', 'warning', 'informational')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_business_rules_action ON kinetic.business_rules (action_type_id);
 ```
 
-#### `kinetic.proposed_edges`
+##### `kinetic.proposed_edges`
 
 Two-phase write: edges in Proposed state awaiting review.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.proposed_edges (
-    id STRING,                       -- same as entity.edges.id
-    edge_id STRING,                  -- FK to entity.edges.id
-    type STRING,
-    from_node_id STRING,
-    to_node_id STRING,
-    proof_chain_id STRING,
-    review_status STRING,            -- pending | approved | rejected
-    review_by STRING,
-    review_at TIMESTAMP,
-    review_rationale STRING,
-    created_at TIMESTAMP,
-    expires_at TIMESTAMP             -- SLA deadline (48h for relationship assertions)
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')
-CLUSTER BY (review_status, created_at);
+CREATE TABLE kinetic.proposed_edges (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    edge_id UUID NOT NULL,  -- references Neo4j edge (cross-store FK)
+    type VARCHAR(128) NOT NULL,
+    from_node_id VARCHAR(256) NOT NULL,
+    to_node_id VARCHAR(256) NOT NULL,
+    proof_chain_id UUID NOT NULL,
+    review_status VARCHAR(16) NOT NULL DEFAULT 'pending'
+        CHECK (review_status IN ('pending', 'approved', 'rejected')),
+    review_by VARCHAR(256),
+    review_at TIMESTAMPTZ,
+    review_rationale TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_proposed_edges_status ON kinetic.proposed_edges (review_status, created_at);
 ```
 
-#### `kinetic.review_queue`
+##### `kinetic.review_queue`
 
 Ordered queue of items awaiting review.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.review_queue (
-    id STRING,
-    item_type STRING,                -- proposed_edge | reviewed_action
-    item_id STRING,
-    action_type_id STRING,
-    review_sla TIMESTAMP,
-    priority STRING,                 -- critical | high | normal | low
-    status STRING,                   -- pending | in_review | completed
-    assigned_reviewer STRING,
-    created_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')
-CLUSTER BY (status, review_sla);
+CREATE TABLE kinetic.review_queue (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    item_type VARCHAR(32) NOT NULL CHECK (item_type IN ('proposed_edge', 'reviewed_action')),
+    item_id UUID NOT NULL,
+    action_type_id VARCHAR(64) REFERENCES kinetic.action_types(id),
+    review_sla TIMESTAMPTZ NOT NULL,
+    priority VARCHAR(16) NOT NULL DEFAULT 'normal'
+        CHECK (priority IN ('critical', 'high', 'normal', 'low')),
+    status VARCHAR(16) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'in_review', 'completed')),
+    assigned_reviewer VARCHAR(256),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_review_queue_status_sla ON kinetic.review_queue (status, review_sla);
 ```
 
-#### `kinetic.compensating_actions`
+##### `kinetic.compensating_actions`
 
 Compensating actions for REVIEWED governance mode failures.
 
 ```sql
-CREATE TABLE tb_canonical.kinetic.compensating_actions (
-    id STRING,
-    original_action_instance_id STRING,  -- FK to kinetic.action_instances.id
-    reason STRING,
-    effects STRING,                      -- JSON: what to undo
-    status STRING,                       -- pending | executing | completed | failed
-    executed_at TIMESTAMP,
-    created_at TIMESTAMP
-)
-TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true');
+CREATE TABLE kinetic.compensating_actions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_action_instance_id UUID REFERENCES kinetic.action_instances(id),
+    reason TEXT NOT NULL,
+    effects JSONB NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'executing', 'completed', 'failed')),
+    executed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
-### 3.8 Catalog: `tb_canonical` — Schema: `metrics`
+#### Schema: `proof`
 
-(No change from existing DDL design.)
+##### `proof.proof_chains`
+
+```sql
+CREATE TABLE proof.proof_chains (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    edge_id UUID NOT NULL,
+    current_state VARCHAR(32),
+    integrity_status VARCHAR(16) NOT NULL DEFAULT 'Valid'
+        CHECK (integrity_status IN ('Valid', 'Challenged', 'Broken', 'Expired')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_proof_chains_edge ON proof.proof_chains (edge_id);
+CREATE INDEX idx_proof_chains_integrity ON proof.proof_chains (integrity_status);
+```
+
+##### `proof.proof_records`
+
+Append-only event-sourced records with SHA-256 hash chaining.
+
+```sql
+CREATE TABLE proof.proof_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chain_id UUID NOT NULL REFERENCES proof.proof_chains(id),
+    sequence BIGINT NOT NULL,
+    event VARCHAR(64) NOT NULL,
+    proof_type VARCHAR(32) NOT NULL
+        CHECK (proof_type IN ('declarative', 'behavioural', 'delegated', 'agentic', 'systemic', 'regulatory')),
+    intent_summary TEXT,
+    intent_payload JSONB,
+    actor_id VARCHAR(256),
+    actor_type VARCHAR(16) CHECK (actor_type IN ('Human', 'System', 'Agent')),
+    authority_basis VARCHAR(256),
+    entitlement_snapshot_id UUID,
+    channel_type VARCHAR(64),
+    session_ref VARCHAR(256),
+    asserted_at TIMESTAMPTZ,
+    verified_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    hash VARCHAR(64) NOT NULL,
+    previous_hash VARCHAR(64),
+    signature TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Append-only enforcement via trigger
+CREATE OR REPLACE FUNCTION proof.proof_records_append_only() RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'DELETE not allowed on proof.proof_records';
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        RAISE EXCEPTION 'UPDATE not allowed on proof.proof_records';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER proof_records_append_only
+    BEFORE INSERT OR UPDATE OR DELETE ON proof.proof_records
+    FOR EACH ROW EXECUTE FUNCTION proof.proof_records_append_only();
+
+-- Unique sequence within chain
+CREATE UNIQUE INDEX idx_proof_records_chain_seq ON proof.proof_records (chain_id, sequence);
+```
+
+##### Masked View (Column-Level Security)
+
+```sql
+CREATE OR REPLACE VIEW proof.proof_records_masked AS
+SELECT
+    id, chain_id, sequence, event, proof_type, intent_summary,
+    CASE WHEN current_setting('app.current_role', true) IN ('auditor', 'proof_registry_reader')
+         THEN intent_payload ELSE NULL END AS intent_payload,
+    actor_id, actor_type, authority_basis,
+    asserted_at, verified_at, expires_at, hash, previous_hash,
+    CASE WHEN current_setting('app.current_role', true) IN ('auditor', 'proof_registry_reader')
+         THEN signature ELSE NULL END AS signature
+FROM proof.proof_records;
+```
+
+#### Schema: `mandate`
+
+##### `mandate.mandates`
+
+Three-tier mandate hierarchy with delegation chain.
+
+```sql
+CREATE TABLE mandate.mandates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    type VARCHAR(32) NOT NULL CHECK (type IN ('HumanMandate', 'SystemMandate', 'AgentMandate')),
+    agent_id VARCHAR(256) NOT NULL,
+    parent_mandate_id UUID REFERENCES mandate.mandates(id),
+    root_mandate_id UUID REFERENCES mandate.mandates(id),
+    permitted_operations JSONB NOT NULL DEFAULT '[]',
+    limits JSONB,
+    constraints JSONB NOT NULL DEFAULT '[]',
+    effective_from TIMESTAMPTZ,
+    effective_to TIMESTAMPTZ,
+    state VARCHAR(16) NOT NULL DEFAULT 'Active'
+        CHECK (state IN ('Active', 'Suspended', 'Revoked')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    proof_chain_id UUID REFERENCES proof.proof_chains(id),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_mandates_agent ON mandate.mandates (agent_id, state);
+CREATE INDEX idx_mandates_root ON mandate.mandates (root_mandate_id);
+```
+
+### 3.3 Delta Lake — Analytics + History
+
+Delta Lake tables are organized under Unity Catalog. The schema mirrors the Neo4j graph structure for historical/analytical access, but the data is **synced from Neo4j via CDC**, not written directly.
+
+#### Catalog: `tb_canonical`
+
+##### Schema: `entity` (historical mirror of Neo4j)
+
+```sql
+-- Synced from Neo4j via CDC. Append-only historical record.
+CREATE TABLE tb_canonical.entity.nodes (
+    id STRING,
+    type STRING,
+    lei STRING,
+    canonical_name STRING,
+    aliases ARRAY<STRING>,
+    created_at TIMESTAMP,
+    created_by STRING,
+    state STRING,
+    domain_extensions STRUCT<
+        cb: MAP<STRING, STRING>,
+        cm: MAP<STRING, STRING>,
+        wm: MAP<STRING, STRING>
+    >,
+    proof_chain_id STRING,
+    updated_at TIMESTAMP,
+    synced_at TIMESTAMP  -- CDC sync timestamp
+)
+TBLPROPERTIES (
+    'delta.appendOnly' = 'true',
+    'delta.enableChangeDataFeed' = 'true'
+)
+CLUSTER BY (type, state, lei);
+```
+
+```sql
+-- Synced from Neo4j via CDC. Append-only historical record.
+CREATE TABLE tb_canonical.entity.edges (
+    id STRING,
+    type STRING,
+    from_node_id STRING,
+    to_node_id STRING,
+    state STRING,
+    effective_from TIMESTAMP,
+    effective_to TIMESTAMP,
+    created_at TIMESTAMP,
+    created_by STRING,
+    proof_chain_id STRING,
+    domain_scope ARRAY<STRING>,
+    containment_zone BOOLEAN,
+    mapping_status STRING,
+    vendor_schema_ref STRING,
+    mapped_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    synced_at TIMESTAMP
+)
+TBLPROPERTIES (
+    'delta.appendOnly' = 'true',
+    'delta.enableChangeDataFeed' = 'true'
+)
+CLUSTER BY (type, from_node_id, state);
+```
+
+##### Schema: `product`, `account`, `transaction`, `channel`
+
+Same pattern as `entity` — historical mirrors synced from Neo4j. Each schema contains a `nodes` table with the same structure as the Neo4j labels, plus `synced_at` for CDC tracking.
+
+##### Schema: `kinetic` (mirror of PostgreSQL kinetic tables)
+
+```sql
+-- Synced from PostgreSQL via CDC. Read-only analytical view.
+CREATE TABLE tb_canonical.kinetic.action_instances (
+    id STRING,
+    action_type_id STRING,
+    actor_id STRING,
+    actor_type STRING,
+    inputs STRING,
+    status STRING,
+    governance_mode STRING,
+    review_status STRING,
+    effects_applied STRING,
+    proof_records_created ARRAY<STRING>,
+    error_message STRING,
+    created_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    synced_at TIMESTAMP
+)
+TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')
+CLUSTER BY (action_type_id, status, created_at);
+```
+
+##### Schema: `metrics`
 
 ```sql
 CREATE TABLE tb_canonical.metrics.metric_definitions (
@@ -696,21 +807,21 @@ CREATE TABLE tb_canonical.metrics.canonical_kpis (
 TBLPROPERTIES ('delta.appendOnly' = 'true');
 ```
 
-### 3.9 Catalog: `tb_containment` — Schema: `vendor`
+#### Catalog: `tb_containment` — Schema: `vendor`
 
 **Separate catalog** for vendor containment zone data. Isolated governance, independent lifecycle.
 
-#### `containment.vendor_systems`
+##### `containment.vendor_systems`
 
 ```sql
 CREATE TABLE tb_containment.vendor.vendor_systems (
     id STRING,
-    vendor_id STRING,                -- e.g., "TradeFinanceVendor", "SupplyChainFinanceVendor"
+    vendor_id STRING,
     vendor_name STRING,
-    vendor_api_version STRING,       -- e.g., "TF-API-v2.1"
-    product_code STRING,             -- e.g., "PROD-TF-001"
-    containment_zone BOOLEAN,        -- always true
-    state STRING,                    -- Active | Suspended | Decommissioned
+    vendor_api_version STRING,
+    product_code STRING,
+    containment_zone BOOLEAN,
+    state STRING,
     created_at TIMESTAMP,
     updated_at TIMESTAMP
 )
@@ -725,25 +836,25 @@ CLUSTER BY (vendor_id, state);
 | `VS-001` | TradeFinanceVendor | TF-API-v2.1 | PROD-TF-001 |
 | `VS-002` | SupplyChainFinanceVendor | SCF-API-v1.4 | PROD-SCF-001 |
 
-#### `containment.containment_zone_raw`
+##### `containment.containment_zone_raw`
 
 Vendor data in native schema. Structure varies by vendor.
 
 ```sql
 CREATE TABLE tb_containment.vendor.containment_zone_raw (
     id STRING,
-    vendor_id STRING,                -- FK to containment.vendor_systems.vendor_id
-    raw_payload STRING,              -- JSON: vendor-native data
+    vendor_id STRING,
+    raw_payload STRING,
     vendor_record_id STRING,
     ingested_at TIMESTAMP,
-    processing_status STRING,        -- raw | parsed | mapped | failed
+    processing_status STRING,
     error_message STRING
 )
 TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')
 CLUSTER BY (vendor_id, processing_status, ingested_at);
 ```
 
-#### `containment.vendor_mapping_status`
+##### `containment.vendor_mapping_status`
 
 Tracks progressive harmonization of vendor fields to canonical ontology terms.
 
@@ -751,10 +862,10 @@ Tracks progressive harmonization of vendor fields to canonical ontology terms.
 CREATE TABLE tb_containment.vendor.vendor_mapping_status (
     id STRING,
     vendor_id STRING,
-    vendor_field_ref STRING,         -- original vendor field/path
-    canonical_term STRING,           -- mapped ontology term
-    mapping_status STRING,           -- Partial | Complete
-    confidence_score DECIMAL(4, 2),  -- 0.00 to 1.00
+    vendor_field_ref STRING,
+    canonical_term STRING,
+    mapping_status STRING,
+    confidence_score DECIMAL(4, 2),
     mapped_by STRING,
     mapped_at TIMESTAMP,
     last_validated_at TIMESTAMP,
@@ -764,6 +875,14 @@ TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true
 CLUSTER BY (vendor_field_ref, mapping_status);
 ```
 
+#### LOB Projection Catalogs
+
+```
+tb_cb   ← CB LOB views (read-only, derived from tb_canonical)
+tb_cm   ← CM LOB views (read-only, derived from tb_canonical)
+tb_wm   ← WM LOB views (read-only, derived from tb_canonical)
+```
+
 ---
 
 ## 4. Unity Catalog Topology
@@ -771,22 +890,19 @@ CLUSTER BY (vendor_field_ref, mapping_status);
 ### 4.1 Catalog Structure
 
 ```
-tb_canonical                          ← source of truth (Channels Technology)
-├── entity                            ← Party, EntityGroup, LegalEntity, etc.
+tb_canonical                          ← analytical source of truth (Channels Technology)
+├── entity                            ← Party, EntityGroup, LegalEntity, etc. (CDC from Neo4j)
 │   ├── nodes / edges / current_nodes / current_edges / legal_entities / kyc_status / ubo_resolution
-├── product                           ← ProductDefinition, ProductInstance, ProductBundle
+├── product                           ← ProductDefinition, ProductInstance, ProductBundle (CDC from Neo4j)
 │   ├── nodes / current_nodes / adoption_by_definition
-├── account                           ← OperatingAccount, VirtualAccount, Pool types
+├── account                           ← OperatingAccount, VirtualAccount, Pool types (CDC from Neo4j)
 │   ├── nodes / current_nodes / pool_membership
-├── transaction                       ← Payment, FXTransaction, SweepTransaction, etc.
+├── transaction                       ← Payment, FXTransaction, SweepTransaction, etc. (CDC from Neo4j)
 │   ├── nodes / current_nodes / stp_eligibility
-├── channel                           ← Channel + entitlement + mandate
+├── channel                           ← Channel + entitlement + mandate (CDC from Neo4j + PostgreSQL)
 │   ├── nodes / entitlements / entitlement_snapshots / mandates / current_entitlements / active_agent_mandates
-├── proof                             ← Proof chain + records
-│   ├── proof_chains / proof_records / current_proof_chains / broken_chains / proof_records_masked
-├── kinetic                           ← NEW: Kinetic layer
-│   ├── interfaces / interface_implementations / action_types / action_instances
-│   ├── function_definitions / business_rules / proposed_edges / review_queue / compensating_actions
+├── kinetic                           ← Kinetic layer (CDC from PostgreSQL)
+│   ├── action_instances (mirror)
 └── metrics                           ← Canonical KPIs
     ├── metric_definitions / canonical_kpis / current_kpis / kpi_trend_30d
 
@@ -799,6 +915,50 @@ tb_cm                                 ← CM LOB views
 tb_wm                                 ← WM LOB views
 ```
 
+**PostgreSQL schemas** (not in Unity Catalog — managed by PostgreSQL directly):
+
+```
+gtb_kinetic
+├── kinetic.interfaces
+├── kinetic.interface_implementations
+├── kinetic.action_types
+├── kinetic.action_instances
+├── kinetic.function_definitions
+├── kinetic.business_rules
+├── kinetic.proposed_edges
+├── kinetic.review_queue
+└── kinetic.compensating_actions
+
+gtb_proof
+├── proof.proof_chains
+└── proof.proof_records (+ proof_records_masked view)
+
+gtb_mandate
+└── mandate.mandates
+```
+
+**Neo4j graph** (not in Unity Catalog — managed by Neo4j directly):
+
+```
+Labels: LegalEntity, NaturalPerson, FinancialInstitution, Regulator,
+        EntityGroup, UltimateParent, ConsolidatedGroup,
+        ProductDefinition, ProductInstance, ProductBundle,
+        OperatingAccount, VirtualAccount, NotionalPool, PhysicalPool,
+        TradingAccount, CustodyAccount,
+        Payment, TradeTransaction, FXTransaction, Fee,
+        InterestPosting, SweepTransaction, Reversal,
+        DigitalPortal, APIChannel, H2HChannel, SWIFTChannel,
+        RegulatoryObligation, ContractualObligation, CreditObligation,
+        SettlementObligation,
+        HumanMandate, AgentMandate,
+        VendorSystem, TradeFinanceSystem, SupplyChainFinanceSystem
+
+Relationships: IS_SUBSIDIARY_OF, OWNS, IS_SUBSCRIBED_TO, IS_PART_OF,
+               HAS_BALANCE, SETTLES_AGAINST, IS_KNOWN_BY,
+               IS_SCREENED_AGAINST, IS_SUBJECT_TO, OPERATES_UNDER,
+               DELEGATED_FROM, IS_HOSTED_BY, HAS_SIGNING_AUTHORITY
+```
+
 ### 4.2 Grant Structure
 
 ```sql
@@ -806,12 +966,15 @@ tb_wm                                 ← WM LOB views
 GRANT OWN ON CATALOG tb_canonical TO `channels-tech-admin`;
 GRANT USAGE ON CATALOG tb_canonical TO `channels-tech-reader`;
 
--- Entity Platform: write access (sole write path)
-GRANT WRITE ON CATALOG tb_canonical TO `entity-platform-writer`;
+-- Entity Platform: write access (sole write path to Neo4j + PostgreSQL)
+GRANT WRITE ON DATABASE gtb_kinetic TO `entity-platform-writer`;
+GRANT WRITE ON DATABASE gtb_proof TO `entity-platform-writer`;
+GRANT WRITE ON DATABASE gtb_mandate TO `entity-platform-writer`;
+-- Neo4j write access managed via Neo4j RBAC
 
 -- Auditor: read access with unmasked proof records
 GRANT READ ON CATALOG tb_canonical TO `auditor`;
-GRANT SELECT ON TABLE tb_canonical.proof.proof_records TO `auditor`;
+GRANT SELECT ON TABLE proof.proof_records TO `auditor`;
 
 -- LOB consumers: read-only via projection views with RLS
 GRANT USAGE ON CATALOG tb_cb TO `cb-consumer`;
@@ -829,11 +992,13 @@ GRANT WRITE ON SCHEMA tb_canonical.metrics TO `pipeline-service`;
 
 ### 4.3 Row-Level Security
 
-RLS via `domain_scope ARRAY<STRING>` on `entity.edges`. The `current_edges` view filters:
+RLS via `domain_scope ARRAY<STRING>` on `entity.edges` (Delta Lake historical mirror). The `current_edges` view filters:
 
 ```sql
 WHERE array_contains(domain_scope, current_lob()) OR array_contains(domain_scope, 'ALL')
 ```
+
+In Neo4j, RLS is enforced at the application layer (Entity Platform API) via Cypher query parameters that filter by `domainScope` property.
 
 LOB catalogs are derived views — they never contain data from other LOBs because the canonical view already excludes it.
 
@@ -841,16 +1006,25 @@ LOB catalogs are derived views — they never contain data from other LOBs becau
 
 ## 5. Pipeline Architecture
 
-### 5.1 Existing Pipelines (unchanged)
+### 5.1 Cross-Store Sync Pipelines
+
+| Pipeline | Source → Target | Trigger | Cadence | Purpose |
+|----------|----------------|---------|---------|---------|
+| Graph History Sync | Neo4j → Delta Lake | CDC (Neo4j APOC trigger) | Near-real-time (<5s) | Mirror graph mutations to Delta Lake for historical/analytical access |
+| Kinetic Mirror Sync | PostgreSQL → Delta Lake | CDC (PostgreSQL logical replication) | Near-real-time (<5s) | Mirror kinetic layer to Delta Lake for analytical queries |
+| Cache Invalidation | PostgreSQL → Redis | Write-through | Sub-millisecond | Invalidate stale cache entries on mandate/kinetic state change |
+| Cache Invalidation | Neo4j → Redis | Write-through | Sub-millisecond | Invalidate stale cache entries on hot node change |
+
+### 5.2 Analytical Pipelines (unchanged)
 
 | Pipeline | Trigger | Cadence | Purpose |
 |----------|---------|---------|---------|
-| Proof Integrity Sweep | Scheduled | Every 15 min | Verify hash chain integrity; flag broken/expired chains |
-| KPI Computation | Scheduled | Hourly | Compute canonical KPIs; append to `canonical_kpis` |
+| Proof Integrity Sweep | Scheduled | Every 15 min | Verify hash chain integrity in PostgreSQL; flag broken/expired chains |
+| KPI Computation | Scheduled | Hourly | Compute canonical KPIs from Delta Lake; append to `canonical_kpis` |
 | CB Projection Refresh | CDF-triggered | On entity.edges change | Refresh `tb_cb` operational projection |
 | Entitlement Snapshot | CDF-triggered | On entitlement change | Capture point-in-time entitlement state |
 
-### 5.2 New Pipelines (Kinetic Layer)
+### 5.3 Kinetic Layer Pipelines
 
 #### Action Execution Pipeline
 
@@ -858,80 +1032,82 @@ LOB catalogs are derived views — they never contain data from other LOBs becau
 Actor invokes Action Type via Entity Platform API
     │
     ├── Phase 1: Pre-flight Validation
-    │   ├── Load action_type from kinetic.action_types
-    │   ├── Load pre_flight_rules from kinetic.business_rules
+    │   ├── Load action_type from PostgreSQL kinetic.action_types
+    │   ├── Load pre_flight_rules from PostgreSQL kinetic.business_rules
     │   ├── Evaluate each rule (delegate to function if needed)
-    │   └── Fail → return pre_flight_failed, log to action_instances
+    │   │   ├── Mandate scope check → PostgreSQL mandate.mandates + Redis cache
+    │   │   └── Graph state check → Neo4j (read-only query)
+    │   └── Fail → return pre_flight_failed, log to PostgreSQL action_instances
     │
     ├── Phase 2: Execute Effects
-    │   ├── Apply graph mutations (create edges, nodes, state transitions)
-    │   ├── Append proof records to relevant chains
-    │   └── Write action_instances row (status=completed)
+    │   ├── Apply graph mutations → Neo4j (CREATE/SET relationships)
+    │   ├── Append proof records → PostgreSQL proof.proof_records
+    │   └── Write action_instances row → PostgreSQL (status=completed)
     │
     └── Phase 3: Governance Routing
         ├── IMMEDIATE → done
-        ├── PROPOSED  → write to kinetic.proposed_edges, add to review_queue
+        ├── PROPOSED  → write to PostgreSQL kinetic.proposed_edges, add to review_queue
         └── REVIEWED  → schedule async review, set SLA deadline
 ```
 
-**Implementation:** Runs within the Entity Platform API (synchronous Phase 1-2, asynchronous Phase 3).
+**Implementation:** Runs within the Entity Platform API (synchronous Phase 1-2, asynchronous Phase 3). Cross-store transaction: Neo4j write + PostgreSQL write must be atomic. If either fails, compensate both.
 
 #### Function Evaluation Pipeline
 
 ```
-State change detected (CDF on entity.edges or channel.mandates)
+State change detected (CDC from Neo4j or PostgreSQL)
     │
     ├── Identify affected functions (via kinetic.function_definitions.dependencies)
     ├── Evaluate functions in dependency order
-    │   ├── deriveEdgeState → re-derive edge state from proof chain replay
-    │   ├── validateMandateScope → if mandate state changed
-    │   └── computeProductEligibility → if KYC/sanctions status changed
+    │   ├── deriveEdgeState → re-derive edge state from proof chain replay (PostgreSQL)
+    │   ├── validateMandateScope → if mandate state changed (PostgreSQL)
+    │   └── computeProductEligibility → if KYC/sanctions status changed (Neo4j)
     │
     └── Write evaluation results to cache (if audit_level=LOG or FULL)
 ```
 
-**Implementation:** CDF-triggered Databricks Job.
+**Implementation:** CDC-triggered Databricks Job for batch functions. Real-time functions run inline in API.
 
 #### Proposed → Active Promotion Pipeline
 
 ```
 Review action received via Entity Platform API
     │
-    ├── Load proposed_edge from kinetic.proposed_edges
+    ├── Load proposed_edge from PostgreSQL kinetic.proposed_edges
     ├── If approved:
-    │   ├── Append PROOF_VERIFIED to proof chain
-    │   ├── Transition edge state to Active (new append-only row)
+    │   ├── Append PROOF_VERIFIED to PostgreSQL proof chain
+    │   ├── Transition edge state to Active in Neo4j (SET state = 'Active')
     │   └── Invalidate cache entries for affected entities
     │
     └── If rejected:
-        ├── Append PROOF_INVALIDATED to proof chain
-        ├── Transition edge state to Terminated
+        ├── Append PROOF_INVALIDATED to PostgreSQL proof chain
+        ├── Transition edge state to Terminated in Neo4j
         └── Alert originating actor
 ```
 
-**Implementation:** Synchronous API endpoint (`POST /proposals/{id}/review`). Cache invalidation via Redis pub/sub.
+**Implementation:** Synchronous API endpoint (`POST /proposals/{id}/review`). Cross-store: PostgreSQL proof record + Neo4j state transition + Redis invalidation.
 
 #### Vendor Data Ingestion Pipeline
 
 ```
 Vendor API / Webhook / File Drop
     │
-    ├── Phase 1: Ingest Raw → containment_zone_raw (processing_status='raw')
+    ├── Phase 1: Ingest Raw → Delta Lake containment_zone_raw (processing_status='raw')
     ├── Phase 2: Parse → apply vendor-specific parser → processing_status='parsed'
     ├── Phase 3: Progressive Mapping
-    │   ├── mapping_status='Complete' → create canonical edge/node
-    │   ├── mapping_status='Partial' → create edge with containment_zone=true
+    │   ├── mapping_status='Complete' → create canonical edge/node in Neo4j
+    │   ├── mapping_status='Partial' → create edge in Neo4j with containment_zone=true
     │   └── no mapping → leave in containment zone, flag for manual review
     │
     └── Phase 4: Canonical Integration
-        ├── Create VendorSystem node (if first ingestion)
-        ├── Create isHostedBy edge from ProductInstance → VendorSystem
-        └── Append SYSTEMIC proof record for ingestion event
+        ├── Create VendorSystem node in Neo4j (if first ingestion)
+        ├── Create IS_HOSTED_BY edge from ProductInstance → VendorSystem in Neo4j
+        └── Append SYSTEMIC proof record to PostgreSQL for ingestion event
 ```
 
 **Implementation:** Databricks Job triggered on vendor data arrival (Event Grid → webhook). Multi-step: ingest → parse → map → integrate.
 
-### 5.3 Pipeline Data Flow
+### 5.4 Pipeline Data Flow
 
 ```mermaid
 flowchart TB
@@ -941,27 +1117,39 @@ flowchart TB
         A3["Mandate Validation\n<1ms"]
     end
 
+    subgraph Neo4j["Neo4j Graph Store"]
+        N1["Nodes\n(Party, Product,\nAccount, etc.)"]
+        N2["Edges\n(OWNS, IS_SUBSIDIARY_OF,\nIS_PART_OF, etc.)"]
+        N3["Indexes\n(id, lei, type)"]
+    end
+
+    subgraph Pg["PostgreSQL\n(Kinetic + Proof)"]
+        P1["kinetic (9 tables)"]
+        P2["proof (2 tables)"]
+        P3["mandate (1 table)"]
+    end
+
     subgraph Delta["Delta Lake\nUnity Catalog"]
-        D1["entity.nodes / edges"]
-        D2["proof.proof_records"]
-        D3["kinetic.action_instances"]
-        D4["kinetic.proposed_edges"]
-        D5["channel.mandates"]
-        D6["containment_zone_raw"]
+        D1["entity.nodes / edges\n(CDC mirror)"]
+        D2["kinetic mirror\n(CDC from Pg)"]
+        D3["containment_zone_raw"]
+        D4["metrics.canonical_kpis"]
     end
 
     subgraph Cache["Hot Cache\nRedis"]
         C1["Entitlements"]
         C2["Active Mandates"]
-        C3["Hot Edges"]
+        C3["Hot Nodes"]
+        C4["Interface Impl."]
     end
 
     subgraph Pipelines["Databricks Pipelines"]
-        P1["Proof Integrity\n15min"]
-        P2["KPI Computation\nhourly"]
-        P3["CB Projection\nCDF"]
-        P4["Action Side Effects\nCDF"]
-        P5["Vendor Ingestion\nevent"]
+        S1["Graph History Sync\nNeo4j→Delta"]
+        S2["Kinetic Mirror Sync\nPg→Delta"]
+        PI["Proof Integrity\n15min"]
+        KP["KPI Computation\nhourly"]
+        CB["CB Projection\nCDF"]
+        VI["Vendor Ingestion\nevent"]
     end
 
     subgraph Vendor["Vendor Systems"]
@@ -969,26 +1157,35 @@ flowchart TB
         V2["SupplyChainFinanceVendor\nPROD-SCF-001"]
     end
 
-    A1 -->|write| D1
-    A1 -->|write| D2
-    A1 -->|write| D3
+    A1 -->|graph write| N2
+    A1 -->|proof write| P2
+    A1 -->|action log| P1
     A1 -->|cache invalidation| Cache
-    A2 -->|write| D1
-    A2 -->|write| D2
-    A2 -->|write| D4
+    A2 -->|graph state| N2
+    A2 -->|proof record| P2
+    A2 -->|proposed edge| P1
     A3 -->|read| C2
-    A3 -.cache miss.-> D5
-    D1 ==CDF==> P3
-    D2 ==CDF==> P1
-    D3 ==CDF==> P4
-    V1 -->|data| P5
-    V2 -->|data| P5
-    P5 -->|write| D6
-    P5 -->|mapped| D1
-    P2 -->|read| D1
-    P2 -->|write| D7["metrics.canonical_kpis"]
+    A3 -.cache miss.-> P3
+
+    N2 ==CDC==> S1
+    S1 -->|append| D1
+    P1 ==CDC==> S2
+    S2 -->|append| D2
+
+    PI -->|read| P2
+    KP -->|read| D1
+    KP -->|write| D4
+    CB -->|read| D1
+
+    V1 -->|data| VI
+    V2 -->|data| VI
+    VI -->|raw| D3
+    VI -->|mapped| N2
+    VI -->|proof| P2
 
     style API fill:#4a90d9,color:#fff
+    style Neo4j fill:#41b883,color:#fff
+    style Pg fill:#336791,color:#fff
     style Delta fill:#7b68ee,color:#fff
     style Cache fill:#ff8c00,color:#fff
     style Pipelines fill:#32cd32,color:#000
@@ -999,7 +1196,7 @@ flowchart TB
 
 ## 6. Nexus Global Volume Estimates
 
-### 6.1 Node Counts
+### 6.1 Node Counts (Neo4j)
 
 | Node Type | Count/Customer | 200 Customers (Y1) | 1,000 Customers (Y5) |
 |-----------|---------------|-------------------|---------------------|
@@ -1015,7 +1212,7 @@ flowchart TB
 | VendorSystem | ~2 (shared) | ~2 | ~2 |
 | **Total Nodes** | — | **~28,205** | **~132,009** |
 
-### 6.2 Edge Counts
+### 6.2 Edge Counts (Neo4j)
 
 | Edge Type | Count/Customer | 200 Customers (Y1) | 1,000 Customers (Y5) |
 |-----------|---------------|-------------------|---------------------|
@@ -1031,7 +1228,7 @@ flowchart TB
 | isHostedBy (vendor) | ~2 | ~400 | ~2,000 |
 | **Total Edges** | — | **~62,600** | **~323,000** |
 
-### 6.3 Proof Record Volume
+### 6.3 Proof Record Volume (PostgreSQL)
 
 | Metric | Y1 (200 customers) | Y5 (1,000 customers) |
 |--------|-------------------|---------------------|
@@ -1040,7 +1237,7 @@ flowchart TB
 | Total proof records | ~187,800 | ~1,615,000 |
 | Annual growth | — | ~30K new records/year (steady state) |
 
-### 6.4 Kinetic Layer Volume
+### 6.4 Kinetic Layer Volume (PostgreSQL)
 
 | Metric | Y1 (200 customers) | Y5 (1,000 customers) |
 |--------|-------------------|---------------------|
@@ -1052,16 +1249,20 @@ flowchart TB
 
 ### 6.5 Storage Projections
 
-| Component | Y1 | Y5 | Notes |
-|-----------|-----|-----|-------|
-| entity.nodes | ~50 MB | ~250 MB | 28K → 132K rows × ~2KB avg |
-| entity.edges | ~100 MB | ~500 MB | 62K → 323K rows × ~1.5KB avg |
-| proof.proof_records | ~500 MB | ~5 GB | JSON payloads dominate |
-| kinetic.action_instances | ~10 MB/mo | ~50 MB/mo | Execution history accumulates |
-| containment.containment_zone_raw | ~200 MB | ~1 GB | Depends on ingestion frequency |
-| **Total Delta Lake** | **~1 GB** | **~10 GB** | Very modest |
+| Store | Component | Y1 | Y5 | Notes |
+|-------|-----------|-----|-----|-------|
+| **Neo4j** | Nodes + Edges | ~500 MB | ~2.5 GB | Graph storage overhead ~10x row size |
+| **PostgreSQL** | Proof records | ~500 MB | ~5 GB | JSON payloads dominate |
+| **PostgreSQL** | Kinetic tables | ~10 MB/mo | ~50 MB/mo | Execution history accumulates |
+| **PostgreSQL** | Mandates | ~1 MB | ~5 MB | Small, stable |
+| **Delta Lake** | Entity history | ~150 MB | ~750 MB | CDC mirror of Neo4j |
+| **Delta Lake** | Kinetic mirror | ~10 MB/mo | ~50 MB/mo | CDC mirror of PostgreSQL |
+| **Delta Lake** | Containment zone | ~200 MB | ~1 GB | Vendor ingestion |
+| **Delta Lake** | LOB projections | ~50 MB | ~250 MB | Derived views |
+| **Delta Lake** | **Total** | **~410 MB** | **~1.25 GB** | Modest |
+| **Redis** | Hot cache | ~10 MB | ~50 MB | In-memory, bounded by hot subset |
 
-**Key observation:** At this scale, storage is not a concern. The primary engineering challenge is **latency** (sub-5ms entitlement checks) and **correctness** (append-only enforcement, hash chain integrity), not scale.
+**Key observation:** At this scale, storage is not a concern for any store. The primary engineering challenges are **latency** (sub-5ms graph traversal via Neo4j, sub-1ms mandate validation via PostgreSQL+Redis) and **cross-store consistency** (CDC sync correctness), not scale.
 
 ---
 
@@ -1071,32 +1272,41 @@ flowchart TB
 
 | Question | Resolution |
 |----------|-----------|
-| Neo4j vs Delta Lake | **Delta Lake only.** Volumes too modest for separate graph DB. |
-| Hot cache technology | **Azure Cache for Redis.** Write-through invalidation via CDF. |
+| Store architecture | **Three-tier: Neo4j (graph) + PostgreSQL (kinetic/proof/mandate) + Delta Lake (analytics/history) + Redis (hot cache).** |
+| Graph store technology | **Neo4j.** Native graph traversal for ownership chains, beneficial ownership, regulatory exposure queries. |
+| Kinetic layer store | **PostgreSQL.** ACID transactions for two-phase write state machine. Append-only proof records via triggers. |
+| Historical/analytical store | **Delta Lake (Databricks on Azure).** Time-travel, CDF, Unity Catalog governance. CDC-synced from Neo4j + PostgreSQL. |
+| Hot cache technology | **Azure Cache for Redis.** Write-through invalidation via pub/sub. |
 | Containment Zone governance | **Separate `tb_containment` catalog** with independent grants. |
-| Kinetic layer table design | **9 tables** in `tb_canonical.kinetic` schema covering interfaces, actions, functions, rules, two-phase write, and compensation. |
+| Kinetic layer table design | **9 tables** in PostgreSQL `kinetic` schema + 2 proof tables + 1 mandate table. |
 
 ### 7.2 Remaining
 
 | Risk | Severity | Notes |
 |------|----------|-------|
-| **Sub-5ms entitlement on Delta Lake (cache miss)** | 🟠 Medium | Cache hit <1ms. Miss → Delta Lake (~10-50ms). Need to benchmark actual point-lookup latency. If miss rate >5%, p99 exceeds 5ms. |
+| **Cross-store transaction consistency** | 🔴 Critical | Action execution writes to both Neo4j (graph mutation) and PostgreSQL (proof record + action instance). If one succeeds and the other fails, we have an inconsistent state. Need a compensating transaction pattern or distributed transaction coordinator. |
+| **CDC sync latency** | 🟠 High | Neo4j → Delta Lake sync must be near-real-time for analytical queries to be useful. Need to benchmark APOC trigger → Event Grid → Databricks Job pipeline latency. Target: <5s. |
+| **Neo4j operational readiness** | 🟠 High | Team needs Neo4j expertise. Azure Neo4j managed service reduces ops burden but doesn't eliminate skill gap. Need training plan or managed service evaluation. |
 | **Vendor API contract review** | 🔴 Critical | TF-API-v2.1 and SCF-API-v1.4 schemas unknown. Containment Zone design assumes JSON. If vendors use XML/EDI/flat files, need format-specific adapters. Blocks vendor integration. |
-| **Initial seeding strategy** | 🟠 High | How to populate 200+ existing customers into append-only tables with valid proof chains? Legacy relationships lack digital evidence. Need migration runbook with exception handling. |
-| **Hash chain computation at batch scale** | 🟡 Medium | SHA-256 per proof record is trivial individually but significant at ~188K initial records. Need benchmark on seed volume × hash throughput. Consider Spark UDF batch computation. |
+| **Initial seeding strategy** | 🟠 High | How to populate 200+ existing customers into Neo4j + PostgreSQL with valid proof chains? Legacy relationships lack digital evidence. Need migration runbook with exception handling. |
+| **Hash chain computation at batch scale** | 🟡 Medium | SHA-256 per proof record is trivial individually but significant at ~188K initial records. Need benchmark on seed volume × hash throughput. Consider batch computation in PostgreSQL. |
 | **API non-functional requirements** | 🟡 Medium | Rate limiting, pagination, circuit breakers, retry semantics not defined. LOB consumers need these before Phase 2. |
-| **Business rule engine selection** | 🟡 Medium | Pre-flight rules need evaluation engine. Options: lightweight expression engine (recommended Phase 1), Drools (if rules grow complex), custom DSL. Current design assumes rules compile to graph queries — needs validation. |
+| **Business rule engine selection** | 🟡 Medium | Pre-flight rules need evaluation engine. Options: lightweight expression engine (recommended Phase 1), Drools (if rules grow complex), custom DSL. |
 
 ### 7.3 Phase 1 Readiness Checklist
 
-- [ ] Benchmark Delta Lake point-lookup latency for entitlement queries (with Liquid Clustering)
-- [ ] Validate Redis cache hit rate assumptions against expected access patterns
+- [ ] **Neo4j provisioning** — Azure managed service evaluation + provisioning
+- [ ] **PostgreSQL provisioning** — Azure Database for PostgreSQL (Flexible Server)
+- [ ] **Cross-store transaction pattern** — design compensating transaction mechanism for Action Execution Pipeline
+- [ ] **CDC pipeline implementation** — Neo4j APOC trigger → Event Grid → Databricks; PostgreSQL logical replication → Databricks
+- [ ] **Team Neo4j training** — Cypher query language, graph modeling, operational procedures
 - [ ] Complete vendor API contract review (Trade Finance + Supply Chain Finance)
 - [ ] Define initial seeding runbook with proof chain exception handling
 - [ ] Benchmark hash chain computation throughput for ~188K initial proof records
 - [ ] Define API non-functional requirements (rate limits, pagination, circuit breakers)
 - [ ] Select business rule evaluation engine for kinetic layer pre-flight rules
+- [ ] **Redis cache design** — schema, eviction policy, invalidation strategy
 
 ---
 
-**Document end.** References ontology spec §2.1-2.3 (nodes/edges), §9 (kinetic layer), §14 (Nexus Global).
+**Document end.** References ontology spec §2.1-2.3 (nodes/edges), §9 (kinetic layer), §14 (Nexus Global). Industry research: Palantir Foundry operational pattern, Stardog BCBS-239 compliance, Neo4j enterprise graph store.

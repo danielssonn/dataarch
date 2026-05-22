@@ -11,7 +11,7 @@
 | # | File | Bytes | Status |
 |---|------|-------|--------|
 | 01 | `memory/dimensions/01-logical-model.md` | ~7K | ✅ Refocused 2026-05-22 — all examples mapped to Nexus Global (Maya's client). Added VendorSystem node type + [VENDOR-HOSTED] constraint for Trade Finance (PROD-TF-001) + Supply Chain Finance (PROD-SCF-001). Entity catalog (20K, 6 product areas), relationship scenarios (22K, 9 workflows incl. 2 vendor), 5 Mermaid diagrams + PNGs updated, Maya product codes (PROD-003/004/010), cash pool config (USA-East 35.5%, Canada 23.2%) |
-| 02 | `memory/dimensions/02-materialization-strategy.md` | ~3.9K | ✅ Rebuilt — Delta Lake/Databricks append-only tables, Liquid Clustering per table, Unity Catalog governance plane (tb_canonical + LOB catalogs), CDF pipelines (~4 defined: integrity sweep 15min, KPI hourly, CB projection refresh, entitlement snapshot), canonical metrics/KPI targets |
+| 02 | `memory/dimensions/02-materialization-strategy.md` | ~3.3K | ✅ Greenfield rewrite 2026-05-22 — Delta Lake only (no Neo4j) + Azure Cache for Redis hot cache, kinetic layer 9 tables (interfaces, action_types, action_instances, function_definitions, business_rules, proposed_edges, review_queue, compensating_actions), containment zone 3 tables (vendor_systems, containment_zone_raw, vendor_mapping_status) in separate tb_containment catalog, 4 new pipelines (action execution, function evaluation, proposed→active promotion, vendor ingestion), Nexus Global volume estimates (~28K nodes / ~62K edges Y1, ~1GB storage) |
 | 03 | `memory/dimensions/03-platform-infrastructure.md` | ~5.0K | ✅ Rebuilt — Databricks on Azure locked as analytical layer, Neo4j recommended for operational graph store (two-store architecture pending POC validation), QLDB proof registry recommendation, Unity Catalog topology + 31-step DDL execution order, RLS via domain_scope ARRAY\<STRING\>, compute targets (<5ms entitlement) |
 | 04 | `memory/dimensions/04-api-integration-contract.md` | ~4.6K | ✅ Rebuilt — Entity Platform API surface (REST endpoints for entity resolution by ID/LEI, relationship traversal including ownership-chain/beneficial-owners/regulatory-exposure), point-in-time queries via ?asOf={timestamp}, proof chain retrieval at any historical moment, sole write path to canonical data, LEI as canonical identity invariant |
 | 05 | `memory/dimensions/05-governance-trust-layer.md` | ~7.1K | ✅ Rebuilt — Proof registry design (append-only event-sourced with SHA-256 hash chaining), proof type taxonomy (declarative→behavioural→delegated→agentic→systemic→regulatory), agentic mandate model three-tier hierarchy (HumanMandate→SystemMandate→AgentMandate) with pre-flight scope validation, ZKP integration points for 4 use cases, security layers (append-only enforcement + RLS + column masking + temporal auditability) |
@@ -42,7 +42,10 @@ artifacts/dimensions/                    ← per-dimension specs/research/diagra
 │       ├── product-hierarchy.{mmd,png}
 │       ├── dual-containment.{mmd,png}
 │       └── cross-product-view.{mmd,png}
-├── 02-materialization-strategy/research/impact-analysis.md (~16K architectural impact analysis)
+├── 02-materialization-strategy/
+│   ├── specs/materialization-strategy.md    (~1102 lines, ~45K — greenfield rewrite, Delta Lake + Redis, kinetic tables, containment zone, pipelines, volume estimates)
+│   ├── diagrams/pipeline-data-flow.png      (rendered pipeline architecture diagram)
+│   └── research/impact-analysis.md          (~16K architectural impact analysis)
 ├── 03-platform-infrastructure/specs/
 │   ├── ddl-readme.md                          (DDL execution order + Unity Catalog mapping)
 │   ├── infrastructure-architecture.md         (two-store vs consolidated comparison)
