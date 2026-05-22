@@ -62,6 +62,11 @@ flowchart TD
             HM["HumanMandate"]
             AM["AgentMandate"]
         end
+
+        subgraph VENDOR["VendorSystem<br/>[VENDOR-HOSTED]"]
+            TF["TradeFinanceSystem"]
+            SCF["SupplyChainFinanceSystem"]
+        end
     end
 
     style CANONICAL fill:#1a1a2e,stroke:#16213e,stroke-width:2px
@@ -73,3 +78,4 @@ flowchart TD
     style CHAN fill:#0f3460,stroke:#533483
     style OBL fill:#1a1a2e,stroke:#e94560
     style MAND fill:#0f3460,stroke:#533483
+    style VENDOR fill:#4a1c40,stroke:#e94560

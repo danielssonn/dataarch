@@ -10,17 +10,14 @@ graph TB
     end
 
     subgraph CONTAINMENT["Containment Zone<br/>(Vendor Data Feeds)"]
-        V1["Vendor System A<br/>(Core Banking)"]
-        V2["Vendor System B<br/>(Payments)"]
-        V3["Vendor System C<br/>(Treasury)"]
+        V1["TradeFinanceVendor<br/>PROD-TF-001 (LCs)<br/>[VENDOR-HOSTED]"]
+        V2["SupplyChainFinanceVendor<br/>PROD-SCF-001 (SCF)<br/>[VENDOR-HOSTED]"]
 
-        M1["Mapping Layer A"]
-        M2["Mapping Layer B"]
-        M3["Mapping Layer C"]
+        M1["Mapping Layer TF<br/>status: Partial"]
+        M2["Mapping Layer SCF<br/>status: Partial"]
 
         V1 --> M1
         V2 --> M2
-        V3 --> M3
     end
 
     subgraph GOVERNANCE["Governance Plane"]

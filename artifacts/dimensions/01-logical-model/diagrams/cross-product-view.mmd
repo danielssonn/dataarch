@@ -1,54 +1,74 @@
 graph TB
 
-    subgraph CLIENT["ACME Corp — Single Client View"]
-        LE["LegalEntity<br/>ACME Corp Canada<br/>LEI: 549300XXX"]
+    subgraph CLIENT["Nexus Global — Single Client View"]
+        LE["LegalEntity<br/>Nexus Global (CA)<br/>LEI: 549300NEXG001"]
+        LEUSA["LegalEntity<br/>Nexus Global USA"]
+        LEUSE["LegalEntity<br/>Nexus Global USA-East"]
+        LEUK["LegalEntity<br/>Nexus Global UK Ltd"]
     end
 
     subgraph PRODUCTS["Product Lines"]
-        CP["Cash Pooling<br/>Pool Master"]
-        FX["FX Hedging<br/>3 Forward Contracts"]
+        CP["Cash Pooling<br/>Pool Master<br/>PROD-010 DDA"]
+        FX["FX Hedging<br/>PROD-003 FX Forward CAD<br/>PROD-004 FX Hedge GBP"]
         IC["Intercompany Lending<br/>£5M / £20M Facility"]
-        PR["Payment Rails<br/>ACH + Fedwire + CHAPS"]
+        PR["Payment Rails<br/>Lynx + Fedwire + CHAPS"]
+        TF["Trade Finance<br/>PROD-TF-001 (LCs)<br/>[VENDOR-HOSTED]"]
+        SCF["Supply Chain Finance<br/>PROD-SCF-001 (SCF)<br/>[VENDOR-HOSTED]"]
     end
 
     subgraph ACCOUNTS["Accounts"]
-        A1["ACME-CA-OP-001<br/>(CAD)"]
-        A2["ACME-US-OP-001<br/>(USD)"]
-        A3["ACME-UK-OP-001<br/>(GBP)"]
-        POOL["NotionalPool<br/>ACME-CAD-Pool"]
+        A1["Nexus-CA-CAD-001<br/>(CAD)<br/>Pool: 23.2%"]
+        A2["Nexus-USE-USD-001<br/>(USD)<br/>Pool: 35.5%"]
+        A3["Nexus-UK-GBP-001<br/>(GBP)"]
+        POOL["NotionalPool<br/>Nexus Multi-Currency Pool"]
+    end
+
+    subgraph VENDORS["Vendor Systems"]
+        TFV["TradeFinanceVendor<br/>containmentZone: true"]
+        SCFV["SupplyChainFinanceVendor<br/>containmentZone: true"]
     end
 
     subgraph REG["Regulatory Exposure"]
         FIN["FINTRAC<br/>✅ KYC Complete"]
         FCEN["FinCEN<br/>✅ KYC Complete"]
-        FCA["FCA<br/>⏳ KYC Pending"]
+        FCA["FCA<br/>✅ KYC Complete"]
+        OSFI["OSFI<br/>✅ Reporting Active"]
     end
 
     LE -->|"owns"| A1
-    LE -->|"owns"| A2
-    LE -->|"owns"| A3
+    LEUSA -->|"owns"| A2
+    LEUK -->|"owns"| A3
+
+    LE -->|"isSubsidiaryOf"| LEUSA
+    LEUSA -->|"isSubsidiaryOf"| LEUSE
+    LE -->|"isSubsidiaryOf"| LEUK
 
     LE -->|"isSubscribedTo"| CP
     LE -->|"isSubscribedTo"| FX
-    LE -->|"isSubscribedTo"| IC
-    LE -->|"isSubscribedTo"| PR
+    LE -->|"isSubscribedTo"| TF
+    LEUK -->|"isSubscribedTo"| SCF
 
     A1 -->|"isPartOf"| POOL
     A2 -->|"isPartOf"| POOL
 
     LE -->|"isKnownBy"| FIN
-    LE -->|"isKnownBy"| FCEN
-    LE -->|"isKnownBy"| FCA
+    LE -->|"isKnownBy"| OSFI
+    LEUSA -->|"isKnownBy"| FCEN
+    LEUK -->|"isKnownBy"| FCA
 
     CP -->|"manages"| A1
     CP -->|"manages"| A2
     CP -->|"manages"| POOL
 
-    FX -->|"settlesAgainst"| A2
+    FX -->|"settlesAgainst"| A1
     IC -->|"settlesAgainst"| A3
     PR -->|"settlesAgainst"| A1
+
+    TF -->|"isHostedBy"| TFV
+    SCF -->|"isHostedBy"| SCFV
 
     style CLIENT fill:#e94560,stroke:#fff,color:#fff
     style PRODUCTS fill:#0f3460,stroke:#533483
     style ACCOUNTS fill:#162447,stroke:#1f4068
+    style VENDORS fill:#4a1c40,stroke:#e94560
     style REG fill:#1a1a2e,stroke:#e94560

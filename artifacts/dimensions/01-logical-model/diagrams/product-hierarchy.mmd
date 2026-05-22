@@ -3,13 +3,13 @@ graph LR
     subgraph PRODUCT_MODEL["Product Taxonomy — Hierarchical Model"]
         PD["ProductDefinition<br/>(Abstract Template)"]
 
-        PI1["ProductInstance<br/>CAD Operating Account"]
-        PI2["ProductInstance<br/>USD Operating Account"]
-        PI3["ProductInstance<br/>Notional Pool"]
+        PI1["ProductInstance<br/>PROD-010 DDA (CAD)"]
+        PI2["ProductInstance<br/>PROD-010 DDA (USD)"]
+        PI3["ProductInstance<br/>Multi-Currency Pool"]
         PI4["ProductInstance<br/>Intraday Sweep"]
         PI5["ProductInstance<br/>Balance Reporting"]
 
-        PB["ProductBundle<br/>Multi-Currency Cash Mgmt Suite"]
+        PB["ProductBundle<br/>Nexus Global Liquidity Suite"]
 
         PD -.->|"instantiates"| PI1
         PD -.->|"instantiates"| PI2
@@ -25,14 +25,14 @@ graph LR
     end
 
     subgraph CLIENT["Client Subscription"]
-        CL["LegalEntity<br/>ACME Corp"]
+        CL["LegalEntity<br/>Nexus Global (CA)"]
         CL -->|"isSubscribedTo"| PB
     end
 
     subgraph ACCOUNTS["Account Materialization"]
-        OA1["OperatingAccount<br/>ACME-CA-OP-001"]
-        OA2["OperatingAccount<br/>ACME-US-OP-001"]
-        POOL["NotionalPool<br/>ACME-CAD-Pool"]
+        OA1["OperatingAccount<br/>Nexus-CA-CAD-001<br/>(Weight: 23.2%)"]
+        OA2["OperatingAccount<br/>Nexus-USE-USD-001<br/>(Weight: 35.5%)"]
+        POOL["NotionalPool<br/>Nexus Multi-Currency Pool"]
 
         PI1 -->|"isGovernedBy"| OA1
         PI2 -->|"isGovernedBy"| OA2

@@ -3,34 +3,37 @@
 **Dimension:** 01 — Logical Model & Ontology
 **Date:** 2026-05-22
 **Status:** Draft
+**Reference Client:** Nexus Global (Maya's client)
 
 ## Purpose
 
-Validate the edge taxonomy against real-world client scenarios. Each scenario traces a complete workflow through the graph, identifying required edges, state transitions, and proof chain interactions.
+Validate the edge taxonomy against real-world client scenarios using the **Nexus Global** reference client. Each scenario traces a complete workflow through the graph, identifying required edges, state transitions, and proof chain interactions.
 
 ---
 
-## Scenario 1: New Client Onboarding + Cash Pool Setup
+## Scenario 1: Nexus Global Onboarding + Cash Pool Setup
 
-**Actor:** ACME Corp (multinational, Canada + US + UK entities)
-**Products:** Cash Pooling + Payment Rails
+**Actor:** Nexus Global (multinational, Canada + US + UK entities)
+**Products:** Cash Pooling (PROD-010 DDA + Liquidity Suite) + Payment Rails
 **Duration:** ~5 days target
 
 ### Graph Operations
 
 **Step 1: Entity Creation**
 ```
-CREATE LegalEntity "ACME Corp Canada" (LEI: 549300XXX)
-CREATE LegalEntity "ACME Corp USA" (LEI: 549300YYY)
-CREATE LegalEntity "ACME UK Ltd" (LEI: 549300ZZZ)
+CREATE LegalEntity "Nexus Global" (LEI: 549300NEXG001, Canada HQ)
+CREATE LegalEntity "Nexus Global USA" (LEI: 549300NEXG002)
+CREATE LegalEntity "Nexus Global USA-East" (LEI: 549300NEXG003)
+CREATE LegalEntity "Nexus Global UK Ltd" (LEI: 549300NEXG004)
 CREATE NaturalPerson "Jane Smith" (CFO, signing authority)
 CREATE NaturalPerson "John Doe" (Treasury Manager)
 
-EDGE: ACME USA → isSubsidiaryOf → ACME Canada
-EDGE: ACME UK → isSubsidiaryOf → ACME USA
-EDGE: Jane Smith → hasSigningAuthority → ACME Canada
-EDGE: Jane Smith → hasSigningAuthority → ACME USA
-EDGE: John Doe → hasAuthorisedRepresentative → ACME Canada (delegated, limited scope)
+EDGE: Nexus Global USA → isSubsidiaryOf → Nexus Global
+EDGE: Nexus Global USA-East → isSubsidiaryOf → Nexus Global USA
+EDGE: Nexus Global UK Ltd → isSubsidiaryOf → Nexus Global
+EDGE: Jane Smith → hasSigningAuthority → Nexus Global
+EDGE: Jane Smith → hasSigningAuthority → Nexus Global USA
+EDGE: John Doe → hasAuthorisedRepresentative → Nexus Global (delegated, limited scope)
 ```
 
 **Proof chains required:**
@@ -44,54 +47,60 @@ EDGE: John Doe → hasAuthorisedRepresentative → ACME Canada (delegated, limit
 CREATE Regulator "FINTRAC"
 CREATE Regulator "FinCEN"
 CREATE Regulator "FCA"
+CREATE Regulator "OSFI"
 
-EDGE: ACME Canada → isKnownBy → FINTRAC (KYC complete)
-EDGE: ACME USA → isKnownBy → FinCEN (KYC complete)
-EDGE: ACME UK → isKnownBy → FCA (KYC pending)
+EDGE: Nexus Global → isKnownBy → FINTRAC (KYC complete)
+EDGE: Nexus Global → isKnownBy → OSFI (KYC complete)
+EDGE: Nexus Global USA → isKnownBy → FinCEN (KYC complete)
+EDGE: Nexus Global UK Ltd → isKnownBy → FCA (KYC complete)
 
-EDGE: ACME Canada → isScreenedAgainst → FINTRAC
-EDGE: ACME USA → isScreenedAgainst → FinCEN
-EDGE: ACME UK → isScreenedAgainst → FCA
+EDGE: Nexus Global → isScreenedAgainst → FINTRAC
+EDGE: Nexus Global USA → isScreenedAgainst → FinCEN
+EDGE: Nexus Global UK Ltd → isScreenedAgainst → FCA
 
-EDGE: ACME Canada → reportsTo → FINTRAC
-EDGE: ACME USA → reportsTo → FinCEN
+EDGE: Nexus Global → reportsTo → FINTRAC
+EDGE: Nexus Global USA → reportsTo → FinCEN
+EDGE: Nexus Global UK Ltd → reportsTo → FCA
 ```
 
 **Step 3: Pool Structure Creation**
 ```
-CREATE ProductBundle "ACME CAD Cash Pool"
-CREATE ProductInstance "CAD Pool Config"
-CREATE NotionalPool "ACME-CAD-Pool"
+CREATE ProductBundle "Nexus Global Liquidity Suite"
+CREATE ProductInstance "Multi-Currency Pool Config"
+CREATE NotionalPool "Nexus Multi-Currency Pool"
 
-CREATE OperatingAccount "ACME-CA-OP-001" (owned by ACME Canada)
-CREATE OperatingAccount "ACME-US-OP-001" (owned by ACME USA)
+CREATE OperatingAccount "Nexus-CA-CAD-001" (owned by Nexus Global, PROD-010 DDA)
+CREATE OperatingAccount "Nexus-USE-USD-001" (owned by Nexus Global USA-East, PROD-010 DDA)
 
-EDGE: ACME Canada → owns → ACME-CA-OP-001
-EDGE: ACME USA → owns → ACME-US-OP-001
-EDGE: ACME-CA-OP-001 → isPartOf → ACME-CAD-Pool
-EDGE: ACME-US-OP-001 → isPartOf → ACME-CAD-Pool
-EDGE: ACME-CAD-Pool → isGovernedBy → CAD Pool Config
-EDGE: ACME Canada → isSubscribedTo → ACME CAD Cash Pool
+EDGE: Nexus Global → owns → Nexus-CA-CAD-001
+EDGE: Nexus Global USA-East → owns → Nexus-USE-USD-001
+EDGE: Nexus-CA-CAD-001 → isPartOf → Nexus Multi-Currency Pool [weight: 23.2%]
+EDGE: Nexus-USE-USD-001 → isPartOf → Nexus Multi-Currency Pool [weight: 35.5%]
+EDGE: Nexus Multi-Currency Pool → isGovernedBy → Multi-Currency Pool Config
+EDGE: Nexus Global → isSubscribedTo → Nexus Global Liquidity Suite
 ```
 
 **Step 4: Sweep Rule Configuration**
 ```
 CREATE ContractualObligation "Intraday Sweep Rule"
-  properties: { type: "intraday", threshold: 0, direction: "upthenoffset", frequency: "continuous" }
+  properties: { type: "intraday", threshold: 0, direction: "upthenoffset", frequency: "continuous", yieldDelta: "real-time" }
 
 EDGE: CAD Pool Config → isGovernedBy → Intraday Sweep Rule
 ```
 
 **Step 5: Payment Rail Subscription**
 ```
-CREATE ProductInstance "ACH Rail ACME"
-CREATE ProductInstance "Fedwire Rail ACME"
+CREATE ProductInstance "Lynx Rail Nexus" (CAD)
+CREATE ProductInstance "Fedwire Rail Nexus" (USD)
+CREATE ProductInstance "CHAPS Rail Nexus" (GBP)
 
-EDGE: ACME Canada → isEligibleFor → ACH (ProductDefinition)
-EDGE: ACME USA → isEligibleFor → Fedwire (ProductDefinition)
-EDGE: ACME Canada → isSubscribedTo → ACH Rail ACME
-EDGE: ACME USA → isSubscribedTo → Fedwire Rail ACME
-EDGE: ACH Rail ACME → isDeliveredThrough → H2HChannel
+EDGE: Nexus Global → isEligibleFor → Lynx (ProductDefinition)
+EDGE: Nexus Global USA → isEligibleFor → Fedwire (ProductDefinition)
+EDGE: Nexus Global UK Ltd → isEligibleFor → CHAPS (ProductDefinition)
+EDGE: Nexus Global → isSubscribedTo → Lynx Rail Nexus
+EDGE: Nexus Global USA → isSubscribedTo → Fedwire Rail Nexus
+EDGE: Nexus Global UK Ltd → isSubscribedTo → CHAPS Rail Nexus
+EDGE: Lynx Rail Nexus → isDeliveredThrough → H2HChannel
 ```
 
 ### Validation Result
@@ -115,17 +124,17 @@ EDGE: ACH Rail ACME → isDeliveredThrough → H2HChannel
 
 ---
 
-## Scenario 2: FX Forward Hedge Execution
+## Scenario 2: FX Forward Hedge Execution (PROD-003)
 
-**Actor:** ACME Corp USA (existing client from Scenario 1)
-**Product:** FX Hedging (USD/CAD 12-month forward)
+**Actor:** Nexus Global (existing client from Scenario 1)
+**Product:** PROD-003 FX Forward (CAD)
 **Notional:** $10M USD → CAD
 
 ### Graph Operations
 
 **Step 1: Hedge Program Mandate**
 ```
-CREATE HumanMandate "ACME Treasury Hedge Mandate"
+CREATE HumanMandate "Nexus Global Treasury Hedge Mandate"
   properties: {
     permittedCurrencies: ["USD", "CAD", "GBP"],
     maxNotionalPerContract: 20000000,
@@ -136,21 +145,22 @@ CREATE HumanMandate "ACME Treasury Hedge Mandate"
     effectiveTo: "2026-12-31"
   }
 
-CREATE AgentMandate "Auto-Hedge Agent"
+CREATE AgentMandate "Nexus Auto-Hedge Agent"
   properties: {
-    parentMandateId: "ACME Treasury Hedge Mandate",
+    parentMandateId: "Nexus Global Treasury Hedge Mandate",
     permittedOperations: ["forward_initiate", "spot_execute"],
     limits: { maxNotional: 5000000, currency: "USD" },
     constraints: ["same_day_settlement", "no_exotic_structures"]
   }
 
-EDGE: Auto-Hedge Agent → operatesUnder → ACME Treasury Hedge Mandate
+EDGE: Nexus Auto-Hedge Agent → operatesUnder → Nexus Global Treasury Hedge Mandate
 ```
 
-**Step 2: Forward Contract Creation**
+**Step 2: Forward Contract Creation (PROD-003)**
 ```
-CREATE ProductInstance "USD/CAD Forward Q3-2026"
+CREATE ProductInstance "PROD-003 USD/CAD Forward Q3-2026"
   properties: {
+    productCode: "PROD-003",
     currencyPair: "USD/CAD",
     notional: 10000000,
     rate: 1.3650,
@@ -158,7 +168,7 @@ CREATE ProductInstance "USD/CAD Forward Q3-2026"
     counterparty: "BANK-INTERNAL"
   }
 
-CREATE SettlementObligation "USD/CAD Forward Settlement"
+CREATE SettlementObligation "PROD-003 USD/CAD Forward Settlement"
   properties: {
     settleDate: "2026-09-15",
     deliverCurrency: "USD",
@@ -167,8 +177,8 @@ CREATE SettlementObligation "USD/CAD Forward Settlement"
     receiveAmount: 13650000
   }
 
-EDGE: ACME USA → isSubscribedTo → USD/CAD Forward Q3-2026
-EDGE: USD/CAD Forward Q3-2026 → creates → USD/CAD Forward Settlement
+EDGE: Nexus Global → isSubscribedTo → PROD-003 USD/CAD Forward Q3-2026
+EDGE: PROD-003 USD/CAD Forward Q3-2026 → creates → PROD-003 USD/CAD Forward Settlement
 ```
 
 **Step 3: Execution Record**
@@ -182,9 +192,9 @@ CREATE FXTransaction "FWD-2026-001"
     valueDate: "2026-09-15"
   }
 
-EDGE: FWD-2026-001 → initiatedBy → ACME USA
+EDGE: FWD-2026-001 → initiatedBy → Nexus Global
 EDGE: FWD-2026-001 → executedVia → SWIFTChannel
-EDGE: FWD-2026-001 → settlesAgainst → ACME-US-OP-001
+EDGE: FWD-2026-001 → settlesAgainst → Nexus-CA-CAD-001
 ```
 
 **Proof chain:**
@@ -215,7 +225,7 @@ EDGE: FWD-2026-001 → settlesAgainst → ACME-US-OP-001
 
 ## Scenario 3: Intercompany Loan Drawdown
 
-**Actor:** ACME UK Ltd (borrower) → ACME Corp Canada (lender)
+**Actor:** Nexus Global UK Ltd (borrower) → Nexus Global Canada (lender)
 **Product:** Intercompany Revolving Facility
 **Amount:** £5M drawdown
 
@@ -223,10 +233,10 @@ EDGE: FWD-2026-001 → settlesAgainst → ACME-US-OP-001
 
 **Step 1: Facility Establishment** (assumes already set up during onboarding)
 ```
-ProductBundle "ACME Intercompany Facility"
+ProductBundle "Nexus Global Intercompany Facility"
 ├── ProductInstance "GBP Revolving Credit £20M"
 ├── ContractualObligation "Master Intercompany Lending Agreement"
-└── CreditObligation "ACME UK Credit Limit £20M"
+└── CreditObligation "Nexus UK Credit Limit £20M"
 ```
 
 **Step 2: Drawdown Request**
@@ -239,9 +249,9 @@ CREATE Payment "IC-Drawdown-001"
     purpose: "working_capital"
   }
 
-EDGE: IC-Drawdown-001 → initiatedBy → ACME UK
-EDGE: IC-Drawdown-001 → settlesAgainst → ACME-CA-OP-001 (lender account)
-EDGE: IC-Drawdown-001 → settlesAgainst → ACME-UK-OP-001 (borrower account)
+EDGE: IC-Drawdown-001 → initiatedBy → Nexus Global UK Ltd
+EDGE: IC-Drawdown-001 → settlesAgainst → Nexus-CA-CAD-001 (lender account)
+EDGE: IC-Drawdown-001 → settlesAgainst → Nexus-UK-GBP-001 (borrower account)
 ```
 
 **Note:** A single payment has two `settlesAgainst` edges — debit from lender, credit to borrower. This is a compound settlement.
@@ -273,7 +283,7 @@ CREATE InterestPosting "IC-Interest-2026-05-22"
     accrualDate: "2026-05-22"
   }
 
-EDGE: IC-Interest-2026-05-22 → settlesAgainst → ACME-UK-OP-001
+EDGE: IC-Interest-2026-05-22 → settlesAgainst → Nexus-UK-GBP-001
 ```
 
 ### Validation Result
@@ -293,7 +303,7 @@ EDGE: IC-Interest-2026-05-22 → settlesAgainst → ACME-UK-OP-001
 
 ## Scenario 4: Payment Initiation + Sanctions Screening
 
-**Actor:** ACME Corp Canada
+**Actor:** Nexus Global Canada
 **Action:** International wire payment via SWIFT gpi
 **Amount:** CAD 250,000 to supplier in Germany
 
@@ -312,7 +322,7 @@ CREATE Payment "WIRE-2026-001"
 
 EDGE: WIRE-2026-001 → initiatedBy → John Doe (authorized representative)
 EDGE: WIRE-2026-001 → executedVia → SWIFTChannel
-EDGE: WIRE-2026-001 → settlesAgainst → ACME-CA-OP-001
+EDGE: WIRE-2026-001 → settlesAgainst → Nexus-CA-CAD-001
 ```
 
 **Step 2: Sanctions Screening** (pre-execution)
@@ -360,14 +370,14 @@ CREATE ProofRecord:
 
 ## Scenario 5: Relationship Suspension + Reinstatement
 
-**Actor:** ACME UK Ltd
+**Actor:** Nexus Global UK Ltd
 **Trigger:** KYC expiry → suspension → renewal → reinstatement
 
 ### State Transition Trace
 
 ```
 // T0: Active relationship
-EDGE: ACME UK → isKnownBy → FCA
+EDGE: Nexus Global UK Ltd → isKnownBy → FCA
   state: Active
   proofChainId: PC-KYC-UK-001
 
@@ -402,7 +412,7 @@ Active → Suspended → Verified → Active ✅
 
 **Actor:** Treasury Liquidity Agent (AI)
 **Action:** Intraday sweep triggered by balance threshold
-**Scope:** ACME-CAD-Pool
+**Scope:** Nexus Multi-Currency Pool
 
 ### Graph Operations
 
@@ -413,7 +423,7 @@ API CALL: POST /mandates/treasury-liquidity-agent-v2/validate
     operation: "pool_sweep",
     amount: 12000000,
     currency: "CAD",
-    pool: "ACME-CAD-Pool"
+    pool: "Nexus Multi-Currency Pool"
   }
 
 Response:
@@ -440,10 +450,10 @@ CREATE SweepTransaction "SWEEP-2026-05-22-001"
     agentId: "treasury-liquidity-agent-v2"
   }
 
-EDGE: SWEEP-2026-05-22-001 → initiatedBy → ACME Canada (pool master, agent acts on behalf)
+EDGE: SWEEP-2026-05-22-001 → initiatedBy → Nexus Global (pool master, agent acts on behalf)
 EDGE: SWEEP-2026-05-22-001 → wasExecutedBy → treasury-liquidity-agent-v2 (AgentMandate)
-EDGE: SWEEP-2026-05-22-001 → settlesAgainst → ACME-CA-OP-001
-EDGE: SWEEP-2026-05-22-001 → settlesAgainst → ACME-US-OP-001
+EDGE: SWEEP-2026-05-22-001 → settlesAgainst → Nexus-CA-CAD-001
+EDGE: SWEEP-2026-05-22-001 → settlesAgainst → Nexus-USE-USD-001
 ```
 
 **Step 3: Agentic Proof Record**
@@ -455,7 +465,7 @@ APPEND ProofRecord to SWEEP-2026-05-22-001 proof chain:
     mandateRef: "MANDATE-ACME-TREASURY-001",
     delegationChain: [
       { actor: "Jane Smith (CFO)", authorityBasis: "TreasuryPolicy-2026", grantedAt: "2026-01-01" },
-      { actor: "Treasury System", authorityBasis: "SystemMandate-ACME-001", grantedAt: "2026-01-15" },
+      { actor: "Treasury System", authorityBasis: "SystemMandate-Nexus-001", grantedAt: "2026-01-15" },
       { actor: "treasury-liquidity-agent-v2", authorityBasis: "AgentScope-v2", grantedAt: "2026-02-01" }
     ],
     scopeAtExecution: {
@@ -466,7 +476,7 @@ APPEND ProofRecord to SWEEP-2026-05-22-001 proof chain:
     decisionTrace: {
       observedCondition: "Pool balance CAD 2.1M below threshold CAD 5M at 14:00",
       appliedRule: "AutoSweep-Rule-7",
-      determinedAction: "Sweep CAD 12M from ACME-US-OP-001 to ACME-CA-OP-001"
+      determinedAction: "Sweep CAD 12M from Nexus-USE-USD-001 to Nexus-CA-CAD-001"
     },
     scopeViolations: []
   }
@@ -484,56 +494,191 @@ APPEND ProofRecord to SWEEP-2026-05-22-001 proof chain:
 
 ---
 
-## Scenario 7: Cross-LOB Client View
+## Scenario 7: Cross-LOB Client View (Nexus Global)
 
-**Trigger:** Relationship manager requests single view of ACME Corp across CB + CM + WM
+**Trigger:** Relationship manager requests single view of Nexus Global across CB + CM + WM
 
 ### Graph Traversal
 
 ```
-START: LegalEntity "ACME Corp Canada" (LEI: 549300XXX)
+START: LegalEntity "Nexus Global (CA)" (LEI: 549300NEXG001)
 
 1. Ownership chain traversal:
-   ACME Canada ← isSubsidiaryOf — ACME USA ← isSubsidiaryOf — ACME UK
-   → 3 entities in group
+   Nexus Global (CA) ← isSubsidiaryOf — Nexus Global USA ← isSubsidiaryOf — Nexus Global USA-East
+   Nexus Global (CA) ← isSubsidiaryOf — Nexus Global UK Ltd
+   → 4 entities in group
 
 2. Product subscriptions (all entities):
-   ACME Canada: Cash Pool (CB), ACH Rail (CB)
-   ACME USA: FX Hedge Program (CM), Fedwire Rail (CB), Intercompany Facility (CB)
-   ACME UK: Intercompany Borrower (CB)
+   Nexus Global (CA): PROD-003 FX Forward CAD, Cash Pool Master, PROD-TF-001 Trade Finance [VENDOR]
+   Nexus Global USA: PROD-010 DDA, Fedwire Rail, Intercompany Facility
+   Nexus Global USA-East: PROD-010 DDA, Pool Member (35.5% weight)
+   Nexus Global UK Ltd: PROD-004 FX Hedge GBP, CHAPS Rail, Intercompany Borrower, PROD-SCF-001 SCF [VENDOR]
 
 3. Active accounts:
-   ACME-CA-OP-001 (CAD) — member of ACME-CAD-Pool
-   ACME-US-OP-001 (USD) — member of ACME-CAD-Pool
-   ACME-UK-OP-001 (GBP) — intercompany borrower
+   Nexus-CA-CAD-001 (CAD) — member of Nexus Multi-Currency Pool (23.2%)
+   Nexus-USE-USD-001 (USD) — member of Nexus Multi-Currency Pool (35.5%)
+   Nexus-UK-GBP-001 (GBP) — intercompany borrower
 
 4. Active transactions (last 30 days):
    Sweeps: 45
-   FX Forwards: 3
+   FX Forwards (PROD-003): 3
    Intercompany Drawdowns: 2
    Wire Payments: 127
 
 5. Regulatory exposure:
    FINTRAC (Canada): KYC complete, AML active
    FinCEN (US): KYC complete, BOI filed
-   FCA (UK): KYC pending
+   FCA (UK): KYC complete
+   OSFI (Canada): Regulatory reporting active
 
 6. Open obligations:
-   FX Forward Settlement: $10M USD/CAD due 2026-09-15
+   FX Forward Settlement (PROD-003): $10M USD/CAD due 2026-09-15
    Intercompany Credit: £5M outstanding of £20M limit
+   Trade Finance (PROD-TF-001): 2 active LCs [vendor-hosted]
+   Supply Chain Finance (PROD-SCF-001): 3 supplier invoices [vendor-hosted]
 ```
 
 **API calls to produce this view:**
 ```
-GET /entities/by-lei/549300XXX
-GET /entities/ACME-CA/ownership-chain
-GET /entities/ACME-CA/relationships?states=active
-GET /entities/ACME-USA/relationships?states=active
-GET /entities/ACME-UK/relationships?states=active
-GET /entities/ACME-CA/regulatory-exposure
+GET /entities/by-lei/549300NEXG001
+GET /entities/Nexus-CA/ownership-chain
+GET /entities/Nexus-CA/relationships?states=active
+GET /entities/Nexus-USA/relationships?states=active
+GET /entities/Nexus-UK/relationships?states=active
+GET /entities/Nexus-CA/regulatory-exposure
 ```
 
 **Validation:** Graph traversal produces complete cross-LOB view without joining operational databases. Single source of truth validated.
+
+---
+
+## Scenario 8: Vendor-Hosted Trade Finance Integration `[VENDOR-HOSTED]`
+
+**Actor:** Nexus Global (Canada)
+**Product:** PROD-TF-001 Letters of Credit (Vendor-Hosted)
+**Action:** New LC issuance via vendor system
+
+### Graph Operations
+
+**Step 1: Vendor System Registration**
+```
+CREATE VendorSystem "TradeFinanceVendor" (TradeFinanceSystem)
+  properties: {
+    vendorName: "TradeTech Solutions",
+    containmentZone: true,
+    vendorSchemaRef: "TF-API-v2.1",
+    apiVersion: "2.1",
+    mappingStatus: "Partial"
+  }
+
+CREATE ProductInstance "PROD-TF-001 Letters of Credit"
+  properties: {
+    productCode: "PROD-TF-001",
+    hostingModel: "VendorHosted",
+    vendorSystemId: "TradeFinanceVendor"
+  }
+
+EDGE: PROD-TF-001 → isHostedBy → TradeFinanceVendor
+EDGE: TradeFinanceVendor → isMappedTo → PROD-TF-001 [mappingStatus: Partial]
+EDGE: Nexus Global → isSubscribedTo → PROD-TF-001
+```
+
+**Step 2: LC Issuance (Vendor-Initiated)**
+```
+// Vendor system creates LC; event flows through Containment Zone
+CREATE TradeTransaction "LC-2026-001"
+  properties: {
+    type: "letter_of_credit",
+    amount: 1000000,
+    currency: "USD",
+    beneficiary: "European Supplier AG",
+    expiryDate: "2026-12-31",
+    vendorRef: "TFV-LC-98765",   // original vendor reference
+    containmentZone: true
+  }
+
+EDGE: LC-2026-001 → initiatedBy → Nexus Global
+EDGE: LC-2026-001 → creates → SettlementObligation (LC expiry)
+```
+
+**Step 3: Progressive Mapping**
+```
+// As vendor data is harmonized, mapping status advances
+UPDATE Edge (TradeFinanceVendor → isMappedTo → PROD-TF-001):
+  mappingStatus: "Partial" → "Complete"
+  mappedAt: "2026-06-15T00:00:00Z"
+```
+
+### Validation Result
+
+| Edge Type Used | Count | Notes |
+|---|---|---|
+| `isHostedBy` | 1 | **New** — vendor system hosting |
+| `isMappedTo` | 1 | **New** — progressive mapping |
+| `initiatedBy` | 1 | Standard |
+| `creates` | 1 | LC → SettlementObligation |
+
+**Key observation:** Vendor-hosted systems require the new `VendorSystem` node type and `isHostedBy`/`isMappedTo` edges. Containment Zone flag ensures vendor schema volatility is isolated from Core model.
+
+---
+
+## Scenario 9: Vendor-Hosted Supply Chain Finance Integration `[VENDOR-HOSTED]`
+
+**Actor:** Nexus Global (as Buyer in reverse factoring program)
+**Product:** PROD-SCF-001 Reverse Factoring (Vendor-Hosted)
+**Action:** Supplier early payment via vendor SCF platform
+
+### Graph Operations
+
+**Step 1: SCF Vendor Registration**
+```
+CREATE VendorSystem "SupplyChainFinanceVendor" (SupplyChainFinanceSystem)
+  properties: {
+    vendorName: "SCF Connect",
+    containmentZone: true,
+    vendorSchemaRef: "SCF-API-v1.4",
+    apiVersion: "1.4",
+    mappingStatus: "Partial"
+  }
+
+CREATE ProductInstance "PROD-SCF-001 Reverse Factoring"
+  properties: {
+    productCode: "PROD-SCF-001",
+    hostingModel: "VendorHosted",
+    vendorSystemId: "SupplyChainFinanceVendor"
+  }
+
+EDGE: PROD-SCF-001 → isHostedBy → SupplyChainFinanceVendor
+EDGE: SupplyChainFinanceVendor → isMappedTo → PROD-SCF-001 [mappingStatus: Partial]
+EDGE: Nexus Global → isSubscribedTo → PROD-SCF-001
+```
+
+**Step 2: Invoice Financing (Vendor-Initiated)**
+```
+CREATE Payment "SCF-EarlyPay-001"
+  properties: {
+    type: "supplier_early_payment",
+    amount: 500000,
+    currency: "USD",
+    supplier: "Component Supplier Inc",
+    vendorRef: "SCF-INV-12345",
+    containmentZone: true
+  }
+
+EDGE: SCF-EarlyPay-001 → initiatedBy → SupplyChainFinanceVendor (on behalf of Nexus Global)
+EDGE: SCF-EarlyPay-001 → settlesAgainst → Supplier OperatingAccount
+```
+
+### Validation Result
+
+| Edge Type Used | Count | Notes |
+|---|---|---|
+| `isHostedBy` | 1 | **New** — vendor system hosting |
+| `isMappedTo` | 1 | **New** — progressive mapping |
+| `initiatedBy` | 1 | Vendor acts on behalf of client |
+| `settlesAgainst` | 1 | Supplier account |
+
+**Key observation:** Same Containment Zone pattern as Trade Finance. Vendor reference (`vendorRef`) preserved alongside canonical properties for traceability.
 
 ---
 
@@ -548,11 +693,14 @@ GET /entities/ACME-CA/regulatory-exposure
 | Transaction | `initiatedBy` ✅, `executedVia` ✅, `settlesAgainst` ✅ | |
 | Regulatory | `isKnownBy` ✅, `isScreenedAgainst` ✅, `reportsTo` ✅, `isSubjectTo` | |
 | Agentic | `operatesUnder` ✅, `wasExecutedBy` ✅ | |
+| **Vendor Integration** | `isHostedBy` ✅, `isMappedTo` ✅ | `containmentStatus` |
 
 ### Recommended Additions
 
 1. **`creates`** (Product → SettlementObligation) — validated by Scenario 2
 2. **Multiple `settlesAgainst` edges per transaction** — validated by Scenarios 3, 6
+3. **`isHostedBy`** (ProductInstance → VendorSystem) — validated by Scenarios 8, 9
+4. **`isMappedTo`** (VendorSystem → ProductInstance) — validated by Scenarios 8, 9
 
 ### Recommended Testing
 

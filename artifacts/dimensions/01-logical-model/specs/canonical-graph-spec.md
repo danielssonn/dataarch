@@ -51,13 +51,17 @@ Node
 │   ├── OperatingAccount
 │   ├── VirtualAccount
 │   ├── NotionalPool
+│   ├── PhysicalPool
 │   ├── TradingAccount
 │   └── CustodyAccount
 ├── Transaction
 │   ├── Payment
 │   ├── TradeTransaction
 │   ├── FXTransaction
-│   └── Fee
+│   ├── Fee
+│   ├── InterestPosting
+│   ├── SweepTransaction
+│   └── Reversal
 ├── Channel
 │   ├── DigitalPortal
 │   ├── APIChannel
@@ -66,11 +70,34 @@ Node
 ├── Obligation
 │   ├── RegulatoryObligation
 │   ├── ContractualObligation
-│   └── CreditObligation
-└── Mandate
-    ├── HumanMandate
-    └── AgentMandate
+│   ├── CreditObligation
+│   └── SettlementObligation
+├── Mandate
+│   ├── HumanMandate
+│   └── AgentMandate
+└── VendorSystem
+    ├── TradeFinanceSystem
+    └── SupplyChainFinanceSystem
 ```
+
+### 2.1.1 Vendor-Hosted System Constraint
+
+**Constraint `[VENDOR-HOSTED]`:** Most core GTB offerings are vendor-hosted systems, not homegrown bank applications. The ontology serves as a **semantic integration layer** over vendor schemas rather than a direct physical canonical store for all operational data.
+
+Specifically for the Nexus Global reference client:
+
+| Product Line | Hosting Model | Ontology Role |
+|---|---|---|
+| Cash Management | Bank-owned (Core) | Direct canonical representation |
+| Liquidity (Pooling/Sweeps) | Bank-owned (Core) | Direct canonical representation |
+| **Trade Finance** | **Vendor-hosted** | **Containment Zone → progressive mapping** |
+| **Supply Chain Finance** | **Vendor-hosted** | **Containment Zone → progressive mapping** |
+
+Vendor systems produce domain-level execution data (proprietary status codes, raw messages). The Containment Zone absorbs them as-is. Progressive mapping lifts signal upward through the ontology layers over time until it lands in Core ontology terms.
+
+**Implication:** `VendorSystem` nodes carry a `containmentZone` flag. Edges from VendorSystem nodes to Core nodes are marked `mappingStatus: Partial | Complete` to track harmonization progress. This is an open constraint to be resolved during implementation (see §13).
+
+**Reference client:** Nexus Global (see §14 for concrete mapping).
 
 ### 2.2 Node Schema (base)
 
@@ -115,7 +142,7 @@ Edge
 ├── Account
 │   ├── isGovernedBy            // Account → isGovernedBy → ProductInstance
 │   ├── hasBalance              // Account → hasBalance → Position
-│   └── isPartOf                // Account → isPartOf → NotionalPool
+│   └── isPartOf                // Account → isPartOf → NotionalPool / PhysicalPool
 ├── Transaction
 │   ├── settlesAgainst          // Transaction → settlesAgainst → Account
 │   ├── initiatedBy             // Transaction → initiatedBy → Party
@@ -125,10 +152,26 @@ Edge
 │   ├── isKnownBy               // Party → isKnownBy → Regulator (KYC status)
 │   ├── isScreenedAgainst       // Party → isScreenedAgainst → Regulator (sanctions)
 │   └── reportsTo               // LegalEntity → reportsTo → Regulator (jurisdiction)
-└── Agentic
-    ├── operatesUnder           // AgentMandate → operatesUnder → HumanMandate
-    └── wasExecutedBy           // Transaction → wasExecutedBy → AgentMandate
+├── Agentic
+│   ├── operatesUnder           // AgentMandate → operatesUnder → HumanMandate
+│   └── wasExecutedBy           // Transaction → wasExecutedBy → AgentMandate
+└── Vendor Integration
+    ├── isHostedBy              // ProductInstance → isHostedBy → VendorSystem
+    ├── isMappedTo              // VendorSystem → isMappedTo → ProductInstance (progressive)
+    └── containmentStatus       // VendorSystem → containmentStatus → Partial | Complete
 ```
+
+### 2.3.1 Vendor Edge Properties
+
+Edges connecting VendorSystem nodes carry additional properties:
+
+```typescript
+interface VendorEdge extends GraphEdge {
+  mappingStatus: "Partial" | "Complete"    // harmonization progress
+  containmentZone: true                     // always true for vendor-origin edges
+  vendorSchemaRef?: string                 // original vendor field/path reference
+  mappedAt?: ISO8601                       // when mapping was last updated
+}
 
 ### 2.4 Edge Schema (base)
 
@@ -1401,4 +1444,109 @@ These require decisions before Phase 1 completion:
 4. **Cross-jurisdictional regulatory nodes** — a single LegalEntity may have `isKnownBy` edges to OSFI, FinCEN, FCA, and MAS simultaneously. How do we model jurisdictional scope on regulatory edges?
 
 5. **ZKP library selection** — Groth16 vs. PLONK vs. STARKs for agentic mandate proofs. Choice affects proof size, verification speed, and trusted setup requirements.
+
+6. **[VENDOR-HOSTED] Trade Finance + Supply Chain Finance integration** — Both product lines are vendor-hosted systems. The ontology must serve as a semantic integration layer over vendor schemas (Containment Zone with progressive mapping) rather than a direct physical canonical store. Resolution requires: (a) vendor API contract review, (b) containment zone schema definition, (c) progressive mapping strategy per vendor feed. Blocks Phase 1 vendor integration work.
+
+---
+
+## 14. Reference Client: Nexus Global
+
+All ontology examples in this spec map to the **Nexus Global** reference client. This section provides the concrete entity/product catalog that grounds the abstract taxonomy above.
+
+### 14.1 Corporate Structure
+
+```
+Nexus Global (UltimateParent, Canada) ──LEI: 549300NEXG001
+├── Nexus Global USA (Subsidiary) ──LEI: 549300NEXG002
+│   └── Nexus Global USA-East (Subsidiary) ──LEI: 549300NEXG003
+└── Nexus Global UK Ltd (Subsidiary) ──LEI: 549300NEXG004
+```
+
+**Jurisdictional coverage:** Canada (FINTRAC/OSFI), United States (FinCEN/Fedwire), United Kingdom (FCA/CHAPS).
+
+### 14.2 Product Catalog (Maya Reference)
+
+| Product Code | Product Name | Type | Hosting |
+|---|---|---|---|
+| **PROD-003** | FX Forward (CAD) | `ProductInstance` | Core |
+| **PROD-004** | FX Hedge (GBP) | `ProductInstance` | Core |
+| **PROD-010** | DDA (Demand Deposit Account) | `ProductInstance` | Core |
+| **PROD-TF-001** | Trade Finance (Letters of Credit) | `ProductInstance` | **Vendor-Hosted** `[VENDOR-HOSTED]` |
+| **PROD-SCF-001** | Supply Chain Finance (Reverse Factoring) | `ProductInstance` | **Vendor-Hosted** `[VENDOR-HOSTED]` |
+
+### 14.3 Cash Pool Configuration
+
+```
+ProductBundle: "Nexus Global Liquidity Suite"
+├── NotionalPool: "Nexus Multi-Currency Pool"
+│   ├── Nexus USA-East OperatingAccount (USD) — Weight: 35.5%
+│   ├── Nexus Canada OperatingAccount (CAD) — Weight: 23.2%
+│   └── [remaining participants TBD]
+├── SweepService: Intraday + Overnight
+└── YieldDelta: Real-time consolidation USD/CAD
+```
+
+**Pool membership:** Governed by `IIsPoolMember` interface. All participants must be within the same `EntityGroup` (Nexus Global ownership-verified).
+
+### 14.4 Vendor System Topology
+
+```
+VendorSystem: "TradeFinanceVendor" [containmentZone: true]
+├── isHostedBy → PROD-TF-001 (Letters of Credit)
+├── containmentStatus → Partial (mapping in progress)
+└── vendorSchemaRef → "TF-API-v2.1"
+
+VendorSystem: "SupplyChainFinanceVendor" [containmentZone: true]
+├── isHostedBy → PROD-SCF-001 (Reverse Factoring)
+├── containmentStatus → Partial (mapping in progress)
+└── vendorSchemaRef → "SCF-API-v1.4"
+```
+
+### 14.5 Complete Nexus Global Graph Snapshot
+
+```mermaid
+graph TD
+    NG["LegalEntity: Nexus Global (CA)"]
+    NGUSA["LegalEntity: Nexus Global USA"]
+    NGUSE["LegalEntity: Nexus Global USA-East"]
+    NGUK["LegalEntity: Nexus Global UK Ltd"]
+
+    NG -->|isSubsidiaryOf| NGUSA
+    NGUSA -->|isSubsidiaryOf| NGUSE
+    NG -->|isSubsidiaryOf| NGUK
+
+    NGUSA -->|owns| ACA["OperatingAccount: USA-USD-001"]
+    NG -->|owns| CCA["OperatingAccount: CA-CAD-001"]
+    NGUSE -->|owns| ECA["OperatingAccount: USAE-USD-001"]
+    NGUK -->|owns| UKA["OperatingAccount: UK-GBP-001"]
+
+    CCA -->|isPartOf| POOL["NotionalPool: Nexus Multi-Currency Pool"]
+    ECA -->|isPartOf| POOL
+
+    NG -->|isSubscribedTo| P003["ProductInstance: PROD-003 FX Forward CAD"]
+    NGUK -->|isSubscribedTo| P004["ProductInstance: PROD-004 FX Hedge GBP"]
+    NGUSA -->|isSubscribedTo| P010["ProductInstance: PROD-010 DDA"]
+
+    NG -->|isSubscribedTo| PTF["ProductInstance: PROD-TF-001 Trade Finance"]
+    NG -->|isSubscribedTo| PSCF["ProductInstance: PROD-SCF-001 Supply Chain Finance"]
+
+    PTF -->|isHostedBy| TFV["VendorSystem: TradeFinanceVendor"]
+    PSCF -->|isHostedBy| SCFV["VendorSystem: SupplyChainFinanceVendor"]
+
+    TFV -.->|containmentZone| CZONE["Containment Zone"]
+    SCFV -.->|containmentZone| CZONE
+
+    classDef vendor fill:#f96,stroke:#333
+    classDef core fill:#9f9,stroke:#333
+    classDef pool fill:#99f,stroke:#333
+    class TFV,SCFV,CZONE vendor
+    class P003,P004,P010 core
+    class POOL pool
+```
+
+**Key observations:**
+- Core products (PROD-003, PROD-004, PROD-010) → direct canonical representation
+- Vendor products (PROD-TF-001, PROD-SCF-001) → Containment Zone with progressive mapping
+- Cash Pool weights (35.5% USA-East, 23.2% Canada) are operational properties on `isPartOf` edges
+- Full entity hierarchy is ownership-verified via proof chains
 

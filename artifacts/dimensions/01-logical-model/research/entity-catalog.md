@@ -3,12 +3,24 @@
 **Dimension:** 01 — Logical Model & Ontology
 **Date:** 2026-05-22
 **Status:** Draft
+**Reference Client:** Nexus Global (Maya's client)
 
 ## Purpose
 
-Complete entity catalog covering all four GTB product lines. Maps business concepts to canonical node types, validates coverage gaps, and defines composite product hierarchy.
+Complete entity catalog covering all four GTB product lines, grounded in the **Nexus Global** reference client. Maps business concepts to canonical node types, validates coverage gaps, and defines composite product hierarchy.
 
 Cross-references the node/edge taxonomy in `specs/canonical-graph-spec.md §2.1–2.3`.
+
+## Vendor-Hosted Constraint `[VENDOR-HOSTED]`
+
+Trade Finance and Supply Chain Finance are **vendor-hosted systems**, not homegrown bank applications. The ontology serves as a **semantic integration layer** over vendor schemas rather than a direct physical canonical store for all operational data. These systems land in the Containment Zone with progressive mapping to Core ontology terms.
+
+| Product Line | Hosting Model | Ontology Role |
+|---|---|---|
+| Cash Management | Bank-owned (Core) | Direct canonical representation |
+| Liquidity (Pooling/Sweeps) | Bank-owned (Core) | Direct canonical representation |
+| **Trade Finance** | **Vendor-hosted** | **Containment Zone → progressive mapping** |
+| **Supply Chain Finance** | **Vendor-hosted** | **Containment Zone → progressive mapping** |
 
 ---
 
@@ -300,42 +312,96 @@ This is a computed eligibility, not a static attribute. The `isEligibleFor` edge
 
 ---
 
+### 2.5 Trade Finance (Vendor-Hosted) `[VENDOR-HOSTED]`
+
+Letters of credit, guarantees, and documentary collections. Hosted by external vendor.
+
+| Business Concept | Node Type | Notes |
+|---|---|---|
+| Trade Finance Vendor | `VendorSystem` (TradeFinanceSystem) | External system; Containment Zone |
+| Letter of Credit | `ProductInstance` | PROD-TF-001; hosted by vendor |
+| Guarantee | `ContractualObligation` | Bank guarantee issued on behalf of client |
+| LC Application | `Payment` | Client request to open LC |
+| LC Settlement | `SettlementObligation` | Payment obligation upon document presentation |
+| Documentary Collection | `TradeTransaction` | Documents exchanged for payment |
+
+**Relationships specific to Trade Finance:**
+```
+LegalEntity (Nexus Global) ──isSubscribedTo──► ProductInstance (PROD-TF-001)
+ProductInstance (PROD-TF-001) ──isHostedBy──► VendorSystem (TradeFinanceVendor)
+VendorSystem ──isMappedTo──► ProductInstance [mappingStatus: Partial]
+LegalEntity ──initiatedBy──► TradeTransaction
+TradeTransaction ──creates──► SettlementObligation
+VendorSystem ──containmentStatus──► Partial | Complete
+```
+
+**Critical constraint:** Vendor system produces proprietary status codes and raw messages. Containment Zone absorbs as-is; progressive mapping lifts signal upward to Core ontology terms over time. No direct canonical representation until mapping is `Complete`.
+
+---
+
+### 2.6 Supply Chain Finance (Vendor-Hosted) `[VENDOR-HOSTED]`
+
+Reverse factoring and supplier financing. Hosted by external vendor.
+
+| Business Concept | Node Type | Notes |
+|---|---|---|
+| SCF Vendor | `VendorSystem` (SupplyChainFinanceSystem) | External system; Containment Zone |
+| Reverse Factoring Program | `ProductInstance` | PROD-SCF-001; hosted by vendor |
+| Supplier Financing | `CreditObligation` | Financing extended to supplier |
+| Invoice Assignment | `ContractualObligation` | Invoice transferred to financier |
+| Early Payment | `Payment` | Supplier receives early payment |
+| Debtor Confirmation | `DECLARATIVE` proof | Buyer confirms invoice obligation |
+
+**Relationships specific to Supply Chain Finance:**
+```
+LegalEntity (Nexus Global, as Buyer) ──isSubscribedTo──► ProductInstance (PROD-SCF-001)
+ProductInstance (PROD-SCF-001) ──isHostedBy──► VendorSystem (SupplyChainFinanceVendor)
+VendorSystem ──isMappedTo──► ProductInstance [mappingStatus: Partial]
+LegalEntity (Supplier) ──isSubjectTo──► CreditObligation (Financing limit)
+Payment (Early Payment) ──settlesAgainst──► OperatingAccount (Supplier)
+```
+
+**Critical constraint:** Same Containment Zone pattern as Trade Finance. Vendor schema volatility is isolated from Core model. Progressive mapping tracks harmonization status.
+
+---
+
 ## 3. Cross-Product-Line Relationships
 
 Entities shared across product lines create the "single view of client" value proposition.
 
-### 3.1 Shared Party Context
+### 3.1 Shared Party Context (Nexus Global)
 
 ```
-LegalEntity "ACME Corp"
-├── Cash Pooling: Pool Master for CAD pool
-├── FX Hedging: Active hedge program (3 forward contracts)
-├── Intercompany Lending: Borrower on $50M facility
-└── Payment Rails: Subscribed to ACH + Fedwire + CHAPS
+LegalEntity "Nexus Global (CA)"
+├── Cash Pooling: Pool Master for Multi-Currency Pool
+├── FX Hedging: PROD-003 FX Forward CAD (active)
+├── Trade Finance: PROD-TF-001 Letters of Credit (vendor-hosted)
+├── Supply Chain Finance: PROD-SCF-001 Reverse Factoring (vendor-hosted)
+└── Payment Rails: Subscribed to ACH + Fedwire + Lynx + CHAPS
 ```
 
-Single `LegalEntity` node. Four `isSubscribedTo` edges to different product bundles. One `ownership-chain` traversal serves all four product lines.
+Single `LegalEntity` node. Multiple `isSubscribedTo` edges to different product instances. One `ownership-chain` traversal serves all product lines.
 
-### 3.2 Shared Account Context
+### 3.2 Shared Account Context (Nexus Global)
 
 ```
-OperatingAccount "ACME-CAD-001"
-├── Cash Pooling: Member of NotionalPool "ACME-CAD-Pool"
-├── Payment Rails: Source account for ACH payments
-├── FX Hedging: Settlement account for CAD leg of forwards
+OperatingAccount "Nexus-CA-CAD-001"
+├── Cash Pooling: Member of NotionalPool "Nexus Multi-Currency Pool" (Weight: 23.2%)
+├── Payment Rails: Source account for Lynx CAD payments
+├── FX Hedging: Settlement account for CAD leg of PROD-003 forwards
 └── Intercompany Lending: Receives drawdown from lending facility
 ```
 
-Single `OperatingAccount` node. Multiple `settlesAgainst` edges from different transaction types. One `isPartOf` edge to pool.
+Single `OperatingAccount` node. Multiple `settlesAgainst` edges from different transaction types. One `isPartOf` edge to pool with weight property.
 
-### 3.3 Shared Regulatory Context
+### 3.3 Shared Regulatory Context (Nexus Global)
 
 ```
-LegalEntity "ACME Corp"
+LegalEntity "Nexus Global (CA)"
 ├── FINTRAC (Canada): KYC complete, AML screening active
-├── FinCEN (US): KYC complete, Beneficial Ownership Info filed
-├── FCA (UK): KYC pending (expanding to CHAPS)
-└── MAS (Singapore): Not yet onboarded
+├── FinCEN (US): KYC complete (via Nexus Global USA subsidiary)
+├── FCA (UK): KYC complete (via Nexus Global UK Ltd subsidiary)
+└── OSFI: Regulatory reporting active
 ```
 
 Multiple `isKnownBy` and `isSubjectTo` edges. Jurisdictional scope is explicit per edge, not inferred from entity attributes.
@@ -346,34 +412,36 @@ Multiple `isKnownBy` and `isSubjectTo` edges. Jurisdictional scope is explicit p
 
 ### 4.1 Entity Coverage Checklist
 
-| Node Type | Cash Pooling | FX Hedging | Intercompany Lending | Payment Rails | Status |
-|---|---|---|---|---|---|
-| LegalEntity | ✅ | ✅ | ✅ | ✅ | Complete |
-| NaturalPerson | ✅ (signatories) | ✅ (UBO) | ✅ (UBO) | ✅ (signatories) | Complete |
-| FinancialInstitution | — | ✅ (counterparty) | — | ✅ (correspondent) | Complete |
-| EntityGroup | ✅ (pool scope) | ✅ (hedge scope) | ✅ (lending scope) | — | Complete |
-| ProductBundle | ✅ | ✅ | ✅ | — | Complete |
-| ProductInstance | ✅ | ✅ | ✅ | ✅ | Complete |
-| OperatingAccount | ✅ | ✅ (settlement) | ✅ | ✅ | Complete |
-| VirtualAccount | ✅ (routing) | — | — | ✅ (routing) | Complete |
-| NotionalPool | ✅ | — | — | — | Complete |
-| PhysicalPool | ✅ | — | — | — | Complete |
-| TradingAccount | — | ✅ (positions) | — | — | Complete |
-| Payment | ✅ (sweeps) | — | ✅ (drawdown) | ✅ | Complete |
-| FXTransaction | — | ✅ | — | — | Complete |
-| InterestPosting | ✅ | — | ✅ | — | Complete |
-| SweepTransaction | ✅ | — | — | — | Complete |
-| Reversal | ✅ | — | ✅ | ✅ | Complete |
-| RegulatoryObligation | ✅ | ✅ | ✅ | ✅ | Complete |
-| ContractualObligation | ✅ | ✅ | ✅ | — | Complete |
-| CreditObligation | — | ✅ (margin) | ✅ (limit) | — | Complete |
-| SettlementObligation | — | ✅ | — | — | Complete |
-| HumanMandate | ✅ | ✅ | ✅ | ✅ | Complete |
-| AgentMandate | ✅ (auto-sweep) | ✅ (auto-hedge) | ✅ (auto-drawdown) | ✅ (auto-payment) | Complete |
+| Node Type | Cash Pooling | FX Hedging | Intercompany Lending | Payment Rails | Trade Finance | SCF | Status |
+|---|---|---|---|---|---|---|---|
+| LegalEntity | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Complete |
+| NaturalPerson | ✅ (signatories) | ✅ (UBO) | ✅ (UBO) | ✅ (signatories) | — | — | Complete |
+| FinancialInstitution | — | ✅ (counterparty) | — | ✅ (correspondent) | — | ✅ (financier) | Complete |
+| EntityGroup | ✅ (pool scope) | ✅ (hedge scope) | ✅ (lending scope) | — | — | — | Complete |
+| ProductBundle | ✅ | ✅ | ✅ | — | — | — | Complete |
+| ProductInstance | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Complete |
+| OperatingAccount | ✅ | ✅ (settlement) | ✅ | ✅ | — | ✅ | Complete |
+| VirtualAccount | ✅ (routing) | — | — | ✅ (routing) | — | — | Complete |
+| NotionalPool | ✅ | — | — | — | — | — | Complete |
+| PhysicalPool | ✅ | — | — | — | — | — | Complete |
+| TradingAccount | — | ✅ (positions) | — | — | — | — | Complete |
+| Payment | ✅ (sweeps) | — | ✅ (drawdown) | ✅ | — | ✅ (early pay) | Complete |
+| FXTransaction | — | ✅ | — | — | — | — | Complete |
+| InterestPosting | ✅ | — | ✅ | — | — | — | Complete |
+| SweepTransaction | ✅ | — | — | — | — | — | Complete |
+| Reversal | ✅ | — | ✅ | ✅ | — | — | Complete |
+| RegulatoryObligation | ✅ | ✅ | ✅ | ✅ | — | — | Complete |
+| ContractualObligation | ✅ | ✅ | ✅ | — | ✅ (guarantee) | ✅ (invoice) | Complete |
+| CreditObligation | — | ✅ (margin) | ✅ (limit) | — | — | ✅ (financing) | Complete |
+| SettlementObligation | — | ✅ | — | — | ✅ (LC settle) | — | Complete |
+| HumanMandate | ✅ | ✅ | ✅ | ✅ | — | — | Complete |
+| AgentMandate | ✅ (auto-sweep) | ✅ (auto-hedge) | ✅ (auto-drawdown) | ✅ (auto-payment) | — | — | Complete |
+| **VendorSystem** | — | — | — | — | **✅** | **✅** | **New** |
+| TradeTransaction | — | — | — | — | ✅ | — | Complete |
 
 ### 4.2 Gap Analysis
 
-**No coverage gaps identified.** All four product lines map to existing or newly-added node types. The additions vs. original spec:
+**No coverage gaps identified.** All six product areas (4 core + 2 vendor-hosted) map to existing or newly-added node types. The additions vs. original spec:
 
 | New Node Type | Rationale |
 |---|---|
@@ -382,8 +450,22 @@ Multiple `isKnownBy` and `isSubjectTo` edges. Jurisdictional scope is explicit p
 | `SweepTransaction` | Cash Pooling operational record |
 | `Reversal` | Payment reversal + loan repayment audit trail |
 | `SettlementObligation` | FX forward maturity + trade settlement |
+| `VendorSystem` | Trade Finance + Supply Chain Finance vendor-hosted systems |
 
-All new types are subtypes of existing parent categories (`Account`, `Transaction`, `Obligation`). No new top-level node categories needed.
+All new types are subtypes of existing parent categories (`Account`, `Transaction`, `Obligation`), except `VendorSystem` which is a new top-level category required by the vendor-hosted constraint.
+
+---
+
+## 5. Vendor-Hosted Mapping Status
+
+Current harmonization status for vendor systems:
+
+| Vendor System | Product | mappingStatus | containmentZone | Notes |
+|---|---|---|---|---|
+| TradeFinanceVendor | PROD-TF-001 (Letters of Credit) | **Partial** | ✅ | API contract review pending |
+| SupplyChainFinanceVendor | PROD-SCF-001 (Reverse Factoring) | **Partial** | ✅ | API contract review pending |
+
+**Resolution path:** Vendor API contract review → Containment Zone schema definition → Progressive mapping strategy per feed. See `[VENDOR-HOSTED]` constraint in canonical spec §13.
 
 ---
 
