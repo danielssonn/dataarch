@@ -1266,6 +1266,123 @@ flowchart TB
 
 ---
 
+## 6. Cross-Store Transaction Consistency
+
+### 6.1 The Problem
+
+Action execution writes to two operational stores:
+1. **Neo4j** — graph mutations (create nodes, create edges, set edge state)
+2. **PostgreSQL** — proof records, action instances, mandate state
+
+If Neo4j succeeds but PostgreSQL fails (or vice versa), the system enters an inconsistent state: the graph shows a relationship that has no proof, or the proof registry records an action that didn't mutate the graph.
+
+This is the #1 technical risk. It must be resolved before Phase 1 kickoff.
+
+### 6.2 Chosen Pattern: Saga with Compensating Actions
+
+We use a **Saga pattern** adapted from the ontology's own two-phase write model. Each action execution is a saga with forward operations and compensating actions.
+
+```
+Phase 1: Pre-flight (read-only)
+  ├── Evaluate business rules against PostgreSQL (kinetic.business_rules)
+  ├── Check mandate scope against PostgreSQL + Redis (mandate.mandates)
+  ├── Read graph state from Neo4j (read-only query)
+  └── If any rule fails → reject, log to action_instances (status=BLOCKED)
+
+Phase 2: Forward Operations (write)
+  ├── Step A: Write action_instances row (status=PENDING) → PostgreSQL
+  │           This is the saga coordinator record.
+  │
+  ├── Step B: Create proof chain + proof record → PostgreSQL
+  │           Proof exists before graph mutation.
+  │           If this fails → saga aborted, no compensation needed.
+  │
+  ├── Step C: Apply graph mutations → Neo4j
+  │           CREATE nodes, CREATE edges, SET properties.
+  │           If this fails → invoke compensating action.
+  │
+  └── Step D: Update action_instances (status=COMPLETED) → PostgreSQL
+              Saga complete.
+
+Phase 3: Compensation (if Step C fails)
+  ├── Step C-Comp: Undo graph mutations → Neo4j
+  │           DELETE nodes/edges created in Step C.
+  │           If this fails → flag for manual intervention.
+  │
+  ├── Step E: Append PROOF_INVALIDATED to proof chain → PostgreSQL
+  │           Proof record exists but is invalidated.
+  │           The chain shows: PROOF_ASSERTED → PROOF_INVALIDATED.
+  │
+  └── Step F: Update action_instances (status=COMPENSATED) → PostgreSQL
+              Saga completed with compensation.
+```
+
+### 6.3 Saga Coordinator
+
+The `kinetic.action_instances` table serves as the saga coordinator:
+
+```sql
+-- Each action execution is a saga instance
+INSERT INTO kinetic.action_instances (
+    id, action_type_id, status, proof_chain_id,
+    started_at, completed_at, compensated_at,
+    saga_log
+) VALUES (
+    gen_random_uuid(), $actionTypeId, 'PENDING', $proofChainId,
+    now(), NULL, NULL,
+    jsonb_build_array(
+        jsonb_build_object('step', 'INIT', 'timestamp', now(), 'status', 'started')
+    )
+);
+```
+
+The `saga_log` column (JSONB array) records each step's outcome. It enables:
+- **Recovery:** If the API crashes mid-saga, a recovery job reads `action_instances` with `status=PENDING` and older than 30 seconds. For each, it checks whether Neo4j mutations exist. If yes → compensate. If no → complete.
+- **Audit:** The saga log provides a complete execution trail for debugging and regulatory examination.
+
+### 6.4 Compensation Guarantees
+
+| Scenario | Neo4j | PostgreSQL | Resolution |
+|----------|-------|------------|------------|
+| Normal execution | ✅ | ✅ | Both committed; saga COMPLETE |
+| Pre-flight fails | — | — | No writes made; saga BLOCKED |
+| Proof write fails | — | ❌ | No graph mutation; saga ABORTED |
+| Graph write fails | ❌ | ✅ | Compensating action undoes proof; saga COMPENSATED |
+| Compensation fails | ❌ | ✅ | Flagged for manual review; saga FAILED |
+| API crash mid-saga | ? | PENDING | Recovery job checks Neo4j state; compensates if needed |
+
+### 6.5 Recovery Job
+
+A scheduled job (every 30 seconds) checks for orphaned saga instances:
+
+```
+FOR each action_instance WHERE status = 'PENDING' AND started_at < now() - 30s:
+    IF proof_chain exists in PostgreSQL:
+        IF corresponding graph mutations exist in Neo4j:
+            UPDATE status = 'COMPLETED'  -- both stores consistent
+        ELSE:
+            APPEND PROOF_INVALIDATED
+            UPDATE status = 'COMPENSATED'  -- proof exists but graph doesn't
+    ELSE:
+        UPDATE status = 'ABORTED'  -- nothing written
+```
+
+### 6.6 Why Not Distributed Transactions?
+
+| Approach | Why Not |
+|----------|--------|
+| **2PC (Two-Phase Commit)** | Neo4j doesn't support XA transactions. PostgreSQL doesn't support cross-database 2PC with Neo4j. |
+| **Outbox Pattern** | Valid alternative, but adds operational complexity (outbox table, poller, idempotency handling). The Saga pattern is simpler and aligns with the ontology's existing compensating action concept (§9.6). |
+| **Eventual Consistency Only** | Not acceptable for proof registry. A graph edge without proof violates invariant #1 ("No edge without a proof chain"). |
+
+The Saga pattern is chosen because it:
+1. Works with the existing stores (no XA requirement)
+2. Aligns with the ontology's two-phase write model (PROPOSED → REVIEWED → compensating action)
+3. Provides clear recovery semantics (saga log + recovery job)
+4. Is auditable (saga log is part of the action instance record)
+
+---
+
 ## 7. Open Questions / Risks
 
 ### 7.1 Resolved
@@ -1284,20 +1401,21 @@ flowchart TB
 
 | Risk | Severity | Notes |
 |------|----------|-------|
-| **Cross-store transaction consistency** | 🔴 Critical | Action execution writes to both Neo4j (graph mutation) and PostgreSQL (proof record + action instance). If one succeeds and the other fails, we have an inconsistent state. Need a compensating transaction pattern or distributed transaction coordinator. |
+| **Cross-store transaction consistency** | 🟠 High (down from 🔴) | Saga pattern designed (§6). Remaining risk: compensation failure → manual intervention. Recovery job mitigates crash scenarios. |
 | **CDC sync latency** | 🟠 High | Neo4j → Delta Lake sync must be near-real-time for analytical queries to be useful. Need to benchmark APOC trigger → Event Grid → Databricks Job pipeline latency. Target: <5s. |
 | **Neo4j operational readiness** | 🟠 High | Team needs Neo4j expertise. Azure Neo4j managed service reduces ops burden but doesn't eliminate skill gap. Need training plan or managed service evaluation. |
 | **Vendor API contract review** | 🔴 Critical | TF-API-v2.1 and SCF-API-v1.4 schemas unknown. Containment Zone design assumes JSON. If vendors use XML/EDI/flat files, need format-specific adapters. Blocks vendor integration. |
 | **Initial seeding strategy** | 🟠 High | How to populate 200+ existing customers into Neo4j + PostgreSQL with valid proof chains? Legacy relationships lack digital evidence. Need migration runbook with exception handling. |
 | **Hash chain computation at batch scale** | 🟡 Medium | SHA-256 per proof record is trivial individually but significant at ~188K initial records. Need benchmark on seed volume × hash throughput. Consider batch computation in PostgreSQL. |
-| **API non-functional requirements** | 🟡 Medium | Rate limiting, pagination, circuit breakers, retry semantics not defined. LOB consumers need these before Phase 2. |
+| **API non-functional requirements** | ✅ Resolved | Defined in Dimension 04 spec: rate limiting, pagination, circuit breakers, idempotency, error taxonomy. |
 | **Business rule engine selection** | 🟡 Medium | Pre-flight rules need evaluation engine. Options: lightweight expression engine (recommended Phase 1), Drools (if rules grow complex), custom DSL. |
 
 ### 7.3 Phase 1 Readiness Checklist
 
 - [ ] **Neo4j provisioning** — Azure managed service evaluation + provisioning
 - [ ] **PostgreSQL provisioning** — Azure Database for PostgreSQL (Flexible Server)
-- [ ] **Cross-store transaction pattern** — design compensating transaction mechanism for Action Execution Pipeline
+- [x] **Cross-store transaction pattern** — Saga with compensating actions designed (§6)
+- [ ] **Cross-store transaction implementation** — implement Saga coordinator, recovery job, compensation logic
 - [ ] **CDC pipeline implementation** — Neo4j APOC trigger → Event Grid → Databricks; PostgreSQL logical replication → Databricks
 - [ ] **Team Neo4j training** — Cypher query language, graph modeling, operational procedures
 - [ ] Complete vendor API contract review (Trade Finance + Supply Chain Finance)

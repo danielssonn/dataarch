@@ -464,15 +464,65 @@ Unchanged API contract. The API orchestrates reads/writes across the operational
 
 ---
 
+## 9. Proof Registry Store: PostgreSQL vs. QLDB
+
+### Evaluation
+
+| Criterion | PostgreSQL + Hash Chain | Amazon QLDB |
+|-----------|------------------------|-------------|
+| **Append-only enforcement** | Trigger-based insert-only policy + CHECK constraints | Native (immutable by design) |
+| **Cryptographic integrity** | SHA-256 hash chaining in application logic | Native (SHA-256 digest map) |
+| **Point-in-time queries** | Application-layer replay from event history | Native (`AS OF` syntax) |
+| **Regulatory narrative** | "Immutable ledger pattern in PostgreSQL" | "AWS purpose-built immutable ledger" |
+| **Team familiarity** | High (existing SQL skills) | Low (new technology) |
+| **Operational complexity** | Low (one less technology to manage) | Medium (new service, new tooling) |
+| **Cross-store consistency** | Same RDBMS as kinetic layer → single transaction for action execution | Separate store → distributed transaction needed |
+| **Azure-native** | Azure Database for PostgreSQL (fully managed) | Available but not Azure-native |
+| **Cost** | Pay for compute + storage | Pay per digest map + storage |
+
+### Decision: PostgreSQL
+
+**Rationale:**
+
+1. **Cross-store consistency.** The kinetic layer (action execution, proof records, mandate validation) already lives in PostgreSQL. Keeping the proof registry in the same store means action execution writes (graph mutation in Neo4j + proof record in PostgreSQL) touch only two stores instead of three. This simplifies the Saga/compensating transaction pattern.
+
+2. **Team familiarity.** The engineering team has PostgreSQL expertise. QLDB introduces a new technology with no existing internal knowledge, adding training overhead and operational risk.
+
+3. **Operational simplicity.** One fewer technology to manage, monitor, and operate. PostgreSQL's append-only trigger pattern + hash chaining provides equivalent cryptographic integrity to QLDB's digest map.
+
+4. **Azure alignment.** Azure Database for PostgreSQL is a first-class managed service with geo-replication, automated backups, and integration with Azure Monitor. QLDB is available but not Azure-native.
+
+5. **Regulatory narrative is addressable.** QLDB's advantage is the "purpose-built immutable ledger" story. This can be addressed through documentation: the append-only trigger, hash chain verification pipeline, and integrity sweep job collectively demonstrate equivalent immutability. The regulatory examination conversation is about evidence, not technology branding.
+
+### Implementation Notes
+
+- Proof registry tables (`proof_chains`, `proof_records`) reside in the same PostgreSQL instance as kinetic layer tables
+- Append-only enforced via `BEFORE UPDATE/DELETE` trigger that raises an exception
+- Hash chain computed at insert time; integrity sweep job runs every 15 minutes to validate chain continuity
+- Column-level masking via PostgreSQL row-level security + Unity Catalog grants for Delta Lake mirror
+
+---
+
 ## 10. Next Steps
 
 1. **Daniel reviews this document** — confirm scope, flag gaps, indicate preference direction
 2. **Obtain data volume estimates** — entity count, edge count, write throughput (addresses Open Questions #1-2)
 3. **Infrastructure inventory** — existing PostgreSQL, Kafka, Azure resources (addresses #3-4)
-4. **Design POC test harness** — if Option B is the direction, build benchmark suite against synthetic data matching estimated volumes
-5. **Run POC benchmarks** — validate or invalidate Option B against exit criteria in §7
-6. **Finalize infrastructure decision** — commit to Option A or B (or hybrid) based on POC results
+4. **Design POC test harness** — benchmark Neo4j traversal + PostgreSQL transaction throughput against estimated volumes
+5. **Run POC benchmarks** — validate three-store architecture against latency targets in §2.1
+6. **Finalize infrastructure decision** — three-store architecture is the committed direction; POC validates sizing, not topology
 
 ---
 
 *This document supersedes the infrastructure section of the original Architecture.md §9 Technology Options. Once approved, it becomes the authoritative reference for platform provisioning and infrastructure procurement.*
+
+---
+
+## Change Log
+
+| Date | Change |
+|------|--------|
+| 2026-05-22 | Added §9 Proof Registry Store decision (PostgreSQL over QLDB). Updated §10 Next Steps to reflect committed three-store direction. |
+
+
+

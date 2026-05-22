@@ -63,11 +63,18 @@
 | Redis (hot cache) | ~10 MB | ~50 MB |
 
 ## New Critical Risks (Three-Tier Architecture)
-- 🔴 **Cross-store transaction consistency** — Action execution writes to both Neo4j (graph mutation) and PostgreSQL (proof record + action instance). Need compensating transaction pattern or distributed transaction coordinator.
+- 🟠 **Cross-store transaction consistency** — Saga pattern designed (§6). Remaining risk: compensation failure → manual intervention. Recovery job mitigates crash scenarios.
 - 🔴 **Vendor API contract review** — TF-API-v2.1 and SCF-API-v1.4 schemas unknown; blocks vendor integration
 - 🟠 **CDC sync latency** — Neo4j → Delta Lake must be <5s; needs benchmarking
 - 🟠 **Neo4j operational readiness** — Team needs Cypher/graph DB expertise; training plan required
 - 🟠 **Initial seeding strategy** — Legacy relationships lack digital evidence
 - 🟡 Hash chain computation at batch scale (~188K initial records)
-- 🟡 API non-functional requirements (rate limits, pagination, circuit breakers)
+- ✅ **API non-functional requirements** — Resolved in Dim 04 spec (rate limits, pagination, circuit breakers, idempotency, error taxonomy)
 - 🟡 Business rule engine selection
+
+## Cross-Store Saga Pattern (§6)
+- Saga coordinator via `kinetic.action_instances` table (status: PENDING → COMPLETED | COMPENSATED | ABORTED | BLOCKED)
+- Forward operations: proof write → graph write → complete
+- Compensation: if graph write fails → invalidate proof + undo graph mutations
+- Recovery job: every 30s, check PENDING instances older than 30s; reconcile Neo4j vs PostgreSQL state
+- No 2PC (Neo4j lacks XA support); Saga aligns with ontology's two-phase write model

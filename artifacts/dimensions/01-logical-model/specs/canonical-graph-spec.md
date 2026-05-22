@@ -974,6 +974,44 @@ ActionType: DrawdownIntercompanyFacility
 
 ---
 
+#### Action: ReviewRelationshipProposal
+
+Reviews a proposed relationship assertion and either approves or rejects it.
+
+```typescript
+ActionType: ReviewRelationshipProposal
+  inputs:
+    - edgeId: string (required) — the Proposed edge under review
+    - decision: ReviewDecision (required) — APPROVE | REJECT
+    - rationale: string (required) — human-readable justification
+    - reviewerId: string (required) — identity of the reviewer
+
+  preFlightRules:
+    - Rule: Edge must exist and be in Proposed state
+    - Rule: Reviewer must have ComplianceOfficer or RelationshipManager role
+    - Rule: Edge must not exceed review SLA window (48 hours for relationship assertions)
+
+  effects:
+    - IF APPROVE:
+      - appendProofRecord: PROOF_VERIFIED with reviewer identity + rationale
+      - transitionState: edge → Active
+    - IF REJECT:
+      - appendProofRecord: PROOF_INVALIDATED with reviewer identity + rationale
+      - transitionState: edge → Terminated
+
+  permissions:
+    - Role: ComplianceOfficer OR RelationshipManager
+
+  governance: IMMEDIATE    // reviewer decision is final
+
+  auditTrail:
+    - actionLog: review decision with rationale
+    - proofChain: verified or invalidated record appended
+    - edgeTrail: state transition event
+```
+
+---
+
 #### Action: InitiatePayment
 
 Initiates a payment instruction through a subscribed rail.
@@ -1371,7 +1409,7 @@ The Proof Registry must be append-only with cryptographic integrity. Options:
 - **Apache Kafka + compacted topics** — event-sourced naturally, high throughput
 - **Amazon QLDB** — purpose-built immutable ledger, good regulatory narrative
 
-**Recommendation:** QLDB for proof registry (immutable ledger is the right abstraction and simplifies regulatory examination conversations).
+**Decision:** PostgreSQL for proof registry. Rationale: (a) co-located with kinetic layer for cross-store consistency, (b) team familiarity, (c) operational simplicity, (d) Azure-native managed service. See Dimension 03 §9 for full evaluation.
 
 ### Ontology Layer
 - **OWL/RDF** for the formal ontology definition (FIBO-aligned)
@@ -1385,29 +1423,6 @@ The kinetic layer's Functions and Action Type pre-flight rules require a busines
 - **Custom DSL** — domain-specific rule language compiled to graph queries; maximum domain alignment but highest build cost
 
 **Recommendation:** Start with a lightweight rule evaluation layer (Felicia or custom expression engine) that compiles rule expressions to graph queries. Avoid heavy rule engines until rule complexity demands them. The key requirement is that rules are declared in the ontology, not hidden in code.
-
-### Graph Store
-| Option | Fit | Notes |
-|--------|-----|-------|
-| **Neo4j** | High | Native graph, mature Cypher query language, enterprise support |
-| **Amazon Neptune** | High | Managed, supports both RDF and property graph, good for regulated environments |
-| **Apache AGE** (Postgres extension) | Medium | Good if existing Postgres infrastructure, lower operational overhead |
-| **Databricks + Delta Lake** | Medium | Better for analytical projections than operational graph traversal |
-
-**Recommendation:** Neo4j for canonical graph store. Databricks for analytical projections. Connect via Entity Platform API — consuming systems never touch graph store directly.
-
-### Proof Registry Store
-The Proof Registry must be append-only with cryptographic integrity. Options:
-- **PostgreSQL with insert-only policy + hash chain** — simplest, audit-friendly
-- **Apache Kafka + compacted topics** — event-sourced naturally, high throughput
-- **Amazon QLDB** — purpose-built immutable ledger, good regulatory narrative
-
-**Recommendation:** QLDB for proof registry (immutable ledger is the right abstraction and simplifies regulatory examination conversations).
-
-### Ontology Layer
-- **OWL/RDF** for the formal ontology definition (FIBO-aligned)
-- **JSON-LD** for API serialisation of graph data
-- **Protobuf** for high-throughput internal messaging
 
 ---
 

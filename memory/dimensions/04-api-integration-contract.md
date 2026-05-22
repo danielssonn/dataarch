@@ -5,8 +5,18 @@ Entity Platform API surface, REST endpoints, auth patterns, rate limits, LOB int
 
 ---
 
-## Current State (2026-05-21)
-Session recovered from git history + research artifacts after restart wipe. API spec exists in Architecture.md §6 Entity Platform API (~3KB). Impact analysis identifies critical non-functional gaps for production readiness.
+## Current State (2026-05-22)
+Spec created: `artifacts/dimensions/04-api-integration-contract/specs/entity-platform-api.md` (~18.5KB). Ontology action surface (supersedes REST CRUD model). All endpoints map to declared Action Types or Functions from Dim 01 §9.
+
+### Key Changes (2026-05-22):
+- API restructured from REST CRUD to **ontology action surface** — `POST /actions/{actionType}` pattern
+- 7 declared action endpoints (AssertRelationship, ReviewRelationshipProposal, ApproveKYCRenewal, InitiatePayment, ExecuteFXForward, DrawdownIntercompanyFacility, InitiatePoolSweep)
+- 6 function evaluation endpoints (deriveEdgeState, validateMandateScope, computeProductEligibility, computeSigningAuthority, computePoolInterest, validateTransferPricing)
+- Interface resolution endpoints (`GET /interfaces/{name}`)
+- Containment Zone endpoints for vendor ingestion
+- Full NFR section: latency targets, rate limiting, pagination, error taxonomy, circuit breaker, idempotency
+- Nexus Global examples throughout (LEI-based queries, FX forward execution example)
+- JSON-LD serialization for API, Protobuf for internal, OWL/RDF for formal ontology
 
 ### Core Endpoints (§6 — Committed):
 ```
