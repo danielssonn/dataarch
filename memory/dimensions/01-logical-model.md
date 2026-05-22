@@ -85,6 +85,30 @@ Full entity catalog covering all four GTB product lines. Key additions vs. origi
 1. **`creates`** edge: `ProductInstance → creates → SettlementObligation` (validated by FX Hedge scenario)
 2. **Multiple `settlesAgainst` edges per transaction** (validated by Intercompany Lending + Sweep scenarios)
 
+## Palantir + Industry Ontology Research (2026-05-22)
+
+### Research Artifact
+- `research/palantir-ontology-analysis.md` — expanded from ~10 sections to 11 sections + 5 subsections (~230 lines added)
+
+### Key Findings
+1. **Noun + Verb convergence** — industry leaders (Palantir, Stardog) agree ontology must include both semantics (data) and kinetics (actions). Our Section 9 addresses this.
+2. **Governance before speed** — Palantir's branching/proposal model and Stardog's transactional reasoning both prioritize governance. Our two-phase write model + Proof Registry align.
+3. **Security as first-class** — Palantir RVs + MDOs with inheritance, Stardog SPARQL-based graph-traversal security. Our flat `domain_scope` is a gap.
+4. **AI grounding** — All platforms ground AI in ontology, not free-floating. Our agentic mandate model aligns.
+
+### New Platforms Analyzed
+- **Stardog:** RDF/OWL reasoning, SWRL rules, Voicebox (Semantic Parsing for hallucination-free NL→SPARQL), BCBS-239 compliance focus, Virtual KGs
+- **Amazon Neptune:** Managed property graph + RDF, no built-in reasoning or kinetic layer
+- **Neo4j:** Our chosen platform — property graph, no built-in reasoning, needs kinetic layer on top
+
+### Updated Comparison Matrix
+Four-platform matrix (Palantir/Stardog/Neo4j/GTB) across 12 dimensions. GTB scores well on: Kinetic Layer (✅), Two-Phase Write (✅), Proof Registry (✅), Agentic Mandates (✅). Gaps: Formal reasoning (❌), Inherited security (⚠️), Property chain inference (❌).
+
+### Refined Recommendations
+- **Must-Have:** Already in spec (Kinetic Layer, Two-Phase Write, Proof Registry, Agentic Mandates)
+- **Should-Add:** Inherited security (Palantir/Stardog inspired), formal consistency checking (Stardog inspired), property chain inference for beneficial ownership
+- **Nice-to-Have:** Semantic Parsing (Stardog Voicebox), Virtual Federation (Stardog VKGs), Branching for Operations (Palantir)
+
 ## Open Questions
 - Complete entity catalog coverage for all four product lines? ✅ DONE — no gaps identified
 - Cross-product-line relationship definitions finalized and tested against real client scenarios? ✅ DONE — 7 scenarios validated

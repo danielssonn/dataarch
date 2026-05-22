@@ -20,6 +20,13 @@
 - 🟠 No initial seeding strategy documented (legacy relationships lacking digital evidence need migration runbook + exception handling)
 - 🟡 API contract lacks non-functional requirements (rate limiting, pagination, circuit breakers — LOB consumers need this before Phase 2 integration work begins)
 
+#### Palantir + Industry Research (2026-05-22):
+- Expanded `palantir-ontology-analysis.md` with full industry comparison (Palantir/Stardog/Neo4j/GTB)
+- Key finding: our Kinetic Layer (Section 9) aligns with industry leaders on noun+verb integration
+- Gaps identified: inherited security, formal consistency checking, property chain inference
+- Stardog's BCBS-239 compliance focus validates our regulatory-first approach
+- Four-platform comparison matrix shows GTB strong on governance/kinetics, needs work on reasoning/security
+
 #### Artifacts Directory Structure:
 ```
 artifacts/dimensions/                    ← per-dimension specs/research/diagrams
