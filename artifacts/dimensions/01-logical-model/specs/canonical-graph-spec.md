@@ -634,7 +634,714 @@ Full mandate model and agentic proof handling.
 
 ---
 
-## 9. Technology Options
+## 9. The Kinetic Layer — Interfaces, Actions, Functions
+
+The canonical graph is not a read-only data catalog. It is an operational layer that governs how the enterprise acts on its data. The kinetic layer introduces three constructs that make the ontology actionable:
+
+1. **Interfaces** — polymorphic contracts that enable cross-type queries and actions
+2. **Action Types** — declared business operations with inputs, rules, effects, and permissions
+3. **Functions** — versioned business logic that evaluates eligibility, derives state, and validates scope
+
+Together these close the gap between "what exists" (semantic layer) and "what can be done" (operational layer). The Entity Platform API (Section 6) is the transport. The kinetic layer is what flows through it.
+
+### 9.1 Interfaces — Polymorphic Contracts
+
+An Interface describes the shape and capabilities shared by multiple concrete Node Types. It enables polymorphic queries and actions without enumerating types.
+
+```typescript
+interface OntologyInterface {
+  name: string              // e.g., "IHasBalance", "IIsSettlementTarget"
+  requiredProperties: string[]  // properties all implementers must carry
+  requiredEdges: string[]       // edge types all implementers must support
+  implementers: NodeType[]      // concrete node types that implement this interface
+}
+```
+
+**Defined Interfaces:**
+
+| Interface | Implementers | Purpose |
+|-----------|--------------|---------|
+| `IIdentifiable` | All Node Types | `id`, `lei?`, `canonicalName`, `aliases` |
+| `IHasLifecycle` | All Node Types | `state` (Active/Suspended/Terminated/Disputed), `createdAt` |
+| `IHasBalance` | OperatingAccount, TradingAccount, CustodyAccount, VirtualAccount | `hasBalance` edge to Position; balance queries work against interface |
+| `IIsSettlementTarget` | OperatingAccount, TradingAccount, CustodyAccount | Can receive `settlesAgainst` edges; payment routing queries work against interface |
+| `IIsRegulatable` | LegalEntity, NaturalPerson, FinancialInstitution | Can have `isKnownBy`, `isScreenedAgainst`, `isSubjectTo` edges |
+| `IIsSubscribable` | ProductDefinition, ProductInstance, ProductBundle | Can be target of `isSubscribedTo` and `isEligibleFor` edges |
+| `IIsPoolMember` | OperatingAccount, VirtualAccount | Can have `isPartOf` edge to NotionalPool/PhysicalPool |
+| `IHasMandate` | NaturalPerson, AgentMandate | Can be source of `operatesUnder` edge; mandate chain traversal |
+
+**Why interfaces matter:**
+- Query "all settlement targets for ACME" → traverse `owns` edges where target implements `IIsSettlementTarget` (returns OperatingAccount + TradingAccount + CustodyAccount without listing types)
+- Action "initiate payment" → input is `IIsSettlementTarget`, not a specific account type
+- Function "compute eligibility" → checks `IIsRegulatable` status before evaluating product subscription
+
+### 9.2 Action Types — Declared Business Operations
+
+An Action Type is a first-class ontology construct that declares a business operation. Unlike a REST endpoint (which is transport), an Action Type declares:
+- What inputs it requires (typed ontology objects)
+- What pre-flight rules must pass (business logic, not just schema validation)
+- What effects it produces (graph mutations, proof chain appends)
+- What permissions are required (role-based, not just authenticated)
+- What audit trail it generates (automatic, tied to affected objects)
+
+**Action Type Schema:**
+```typescript
+interface ActionType {
+  id: string                          // unique action identifier
+  name: string                        // human-readable name
+  description: string                 // what this action does
+  version: string                     // semantic version; breaking changes bump major
+
+  // Inputs — typed ontology objects required to invoke this action
+  inputs: ActionInput[]
+
+  // Pre-flight rules — evaluated before execution; all must pass
+  preFlightRules: BusinessRule[]
+
+  // Effects — atomic graph mutations produced by this action
+  effects: ActionEffect[]
+
+  // Permissions — who can invoke this action
+  permissions: PermissionRequirement[]
+
+  // Audit — automatic trail generated
+  auditTrail: AuditConfig
+
+  // Governance — does this action require review before applying?
+  governance: GovernanceMode          // immediate | proposed | reviewed
+}
+
+interface ActionInput {
+  name: string                        // parameter name
+  type: string                        // NodeType or Interface (e.g., "LegalEntity", "IIsSettlementTarget")
+  required: boolean
+}
+
+interface ActionEffect {
+  type: EffectType                    // createEdge | appendProofRecord | transitionState | createNode
+  target: string                      // which object/edge is affected
+  details: Record<string, unknown>    // effect-specific parameters
+}
+
+enum GovernanceMode {
+  IMMEDIATE   = "immediate",          // effect applies on invocation (standard operations)
+  PROPOSED    = "proposed",           // effect exists on branch; requires review to merge (high-stakes)
+  REVIEWED    = "reviewed"            // effect auto-merges after async review (routine with oversight)
+}
+```
+
+### 9.3 Defined Action Types
+
+These are the core business operations for GTB. Each is a first-class ontology construct, not an undocumented API behavior.
+
+---
+
+#### Action: AssertRelationship
+
+Asserts a new relationship between two ontology objects.
+
+```typescript
+ActionType: AssertRelationship
+  inputs:
+    - sourceNodeId: string (required) — source node
+    - targetNodeId: string (required) — target node
+    - edgeType: EdgeType (required) — relationship type
+    - proofPayload: ProofRecord (required) — initial proof record
+
+  preFlightRules:
+    - Rule: Source and target nodes must exist and be Active
+    - Rule: No existing Active edge of same type between these nodes
+    - Rule: Proof payload must satisfy proof type requirements for edge type
+    - Rule: Actor must have authority to assert this relationship type
+
+  effects:
+    - createEdge: new GraphEdge in Proposed state
+    - appendProofRecord: initial proof record on new ProofChain
+
+  permissions:
+    - Role: RelationshipManager OR ComplianceOfficer (varies by edge type)
+
+  governance: PROPOSED    // new relationships require review before Active
+
+  auditTrail:
+    - actionLog: AssertRelationship invocation
+    - proofChain: initial record appended
+    - edgeTrail: edge creation event
+```
+
+---
+
+#### Action: ApproveKYCRenewal
+
+Approves a KYC renewal for a LegalEntity with a Regulator.
+
+```typescript
+ActionType: ApproveKYCRenewal
+  inputs:
+    - legalEntity: LegalEntity (required)
+    - regulator: Regulator (required)
+    - kycDocuments: DocumentReference[] (required)
+    - expiryDate: ISO8601 (required)
+
+  preFlightRules:
+    - Rule: LegalEntity must exist and be Active
+    - Rule: Existing isKnownBy edge must be Suspended or Expired (not Active)
+    - Rule: KYC documents must be non-empty and validly referenced
+    - Rule: Actor must have ComplianceOfficer role
+    - Rule: Regulator must match jurisdiction of LegalEntity
+
+  effects:
+    - appendProofRecord: PROOF_ASSERTED with DECLARATIVE proof type
+    - appendProofRecord: PROOF_VERIFIED (auto-verified by approving officer)
+    - transitionState: isKnownBy edge → Active
+
+  permissions:
+    - Role: ComplianceOfficer
+
+  governance: IMMEDIATE    // compliance officer approval is final
+
+  auditTrail:
+    - actionLog: KYC renewal approval with officer identity
+    - proofChain: two records appended (asserted + verified)
+    - regulatoryTrail: jurisdiction-specific compliance event
+```
+
+---
+
+#### Action: InitiatePoolSweep
+
+Initiates a balance sweep within a cash pool.
+
+```typescript
+ActionType: InitiatePoolSweep
+  inputs:
+    - pool: NotionalPool | PhysicalPool (required)
+    - direction: SweepDirection (required) — up | down | upthenoffset
+    - threshold: Decimal (optional) — balance trigger
+    - agentId: string (optional) — if agent-initiated
+
+  preFlightRules:
+    - Rule: Pool must exist and be Active
+    - Rule: All pool members must be within same EntityGroup (ownership-verified)
+    - Rule: If agent-initiated, AgentMandate must include "pool_sweep" in permittedOperations
+    - Rule: Sweep amount must be within mandate limits (if agent-initiated)
+    - Rule: No participant accounts in Suspended or Terminated state
+
+  effects:
+    - createNode: SweepTransaction
+    - createEdge: SweepTransaction → settlesAgainst → source account
+    - createEdge: SweepTransaction → settlesAgainst → destination account
+    - appendProofRecord: SYSTEMIC proof record on sweep transaction
+
+  permissions:
+    - Role: TreasuryOperator OR AgentMandate (with pool_sweep scope)
+
+  governance: IMMEDIATE    // intraday sweeps are time-critical
+
+  auditTrail:
+    - actionLog: sweep initiation with parameters
+    - proofChain: systemic record with decision trace (if agent-initiated)
+    - transactionTrail: sweep transaction creation event
+```
+
+---
+
+#### Action: ExecuteFXForward
+
+Executes an FX forward contract.
+
+```typescript
+ActionType: ExecuteFXForward
+  inputs:
+    - legalEntity: LegalEntity (required) — client
+    - currencyPair: string (required) — e.g., "USD/CAD"
+    - notional: Decimal (required)
+    - rate: Decimal (required)
+    - maturityDate: ISO8601 (required)
+    - settlementAccount: IIsSettlementTarget (required) — uses interface, not concrete type
+
+  preFlightRules:
+    - Rule: LegalEntity must have active FX Hedge Program subscription
+    - Rule: Notional must be within mandate limits per contract
+    - Rule: Aggregate exposure after this contract must not exceed program limit
+    - Rule: Currency pair must be within permitted pairs in mandate
+    - Rule: Settlement account must be owned by LegalEntity
+    - Rule: If agent-initiated, AgentMandate must include "forward_initiate"
+
+  effects:
+    - createNode: FXTransaction
+    - createNode: SettlementObligation (maturity)
+    - createEdge: FXTransaction → initiatedBy → LegalEntity
+    - createEdge: FXTransaction → settlesAgainst → SettlementAccount
+    - createEdge: ProductInstance → creates → SettlementObligation
+    - appendProofRecord: SYSTEMIC proof record on FX transaction
+
+  permissions:
+    - Role: TreasuryTrader OR AgentMandate (with forward_initiate scope)
+
+  governance: IMMEDIATE    // market execution is time-critical
+
+  auditTrail:
+    - actionLog: forward execution with full trade details
+    - proofChain: systemic record with execution timestamp
+    - obligationTrail: settlement obligation creation event
+```
+
+---
+
+#### Action: DrawdownIntercompanyFacility
+
+Draws down on an intercompany lending facility.
+
+```typescript
+ActionType: DrawdownIntercompanyFacility
+  inputs:
+    - borrower: LegalEntity (required)
+    - lender: LegalEntity (required)
+    - facilityId: string (required) — ProductInstance reference
+    - amount: Decimal (required)
+    - currency: string (required)
+    - purpose: string (required)
+
+  preFlightRules:
+    - Rule: Borrower and Lender must be within same EntityGroup
+    - Rule: Facility must be Active and not at credit limit
+    - Rule: Drawdown amount + outstanding balance must not exceed facility limit
+    - Rule: Arm's-length pricing must be validated for jurisdiction
+    - Rule: Borrower must have active subscription to facility ProductInstance
+
+  effects:
+    - createNode: Payment (drawdown)
+    - createEdge: Payment → initiatedBy → Borrower
+    - createEdge: Payment → settlesAgainst → Lender account (debit)
+    - createEdge: Payment → settlesAgainst → Borrower account (credit)
+    - appendProofRecord: SYSTEMIC proof record on payment
+    - appendProofRecord: CreditObligation update (reduced availability)
+
+  permissions:
+    - Role: TreasuryOperator
+
+  governance: REVIEWED    // intercompany lending requires async compliance review
+
+  auditTrail:
+    - actionLog: drawdown with facility details
+    - proofChain: systemic record + credit obligation update
+    - regulatoryTrail: transfer pricing validation event
+```
+
+---
+
+#### Action: InitiatePayment
+
+Initiates a payment instruction through a subscribed rail.
+
+```typescript
+ActionType: InitiatePayment
+  inputs:
+    - initiator: IHasMandate (required) — uses interface; NaturalPerson or AgentMandate
+    - sourceAccount: IIsSettlementTarget (required)
+    - beneficiary: string (required) — beneficiary identifier
+    - beneficiaryBank: string (required) — BIC/SWIFT
+    - amount: Decimal (required)
+    - currency: string (required)
+    - rail: ProductInstance (required) — subscribed rail
+
+  preFlightRules:
+    - Rule: Source account must be Active and owned by initiator's LegalEntity
+    - Rule: Rail must be Active and subscribed by LegalEntity
+    - Rule: Payment amount must be within signing authority limits
+    - Rule: If dual-signature threshold exceeded, second approval required
+    - Rule: Sanctions screening must pass (pre-flight call to screening service)
+    - Rule: If agent-initiated, AgentMandate must include "payment_initiate"
+
+  effects:
+    - createNode: Payment
+    - createEdge: Payment → initiatedBy → initiator
+    - createEdge: Payment → executedVia → Channel (derived from rail)
+    - createEdge: Payment → settlesAgainst → sourceAccount
+    - appendProofRecord: REGULATORY proof record (sanctions screening result)
+    - appendProofRecord: BEHAVIOURAL proof record (initiation consent)
+
+  permissions:
+    - Role: SigningAuthority (amount-tiered) OR AgentMandate (with payment_initiate scope)
+
+  governance: IMMEDIATE    // payments are time-critical
+
+  auditTrail:
+    - actionLog: payment initiation with full details
+    - proofChain: screening + consent records
+    - sanctionsTrail: screening result with list references
+```
+
+---
+
+### 9.4 Functions — Versioned Business Logic
+
+Functions are named, versioned business logic units that evaluate rules, derive state, or compute values. They are first-class ontology constructs — not hidden inside application code.
+
+**Function Schema:**
+```typescript
+interface OntologyFunction {
+  id: string
+  name: string
+  description: string
+  version: string                     // semantic version
+  inputs: FunctionInput[]
+  output: FunctionOutput
+  logic: FunctionLogic                // business rule expression or code reference
+  dependencies: string[]              // other functions this function calls
+  auditLevel: AuditLevel              // none | log | full
+}
+
+interface FunctionInput {
+  name: string
+  type: string                        // NodeType, Interface, or primitive
+}
+
+interface FunctionOutput {
+  type: string                        // primitive, enum, or complex type
+}
+
+type FunctionLogic = BusinessRuleExpression | CodeReference
+
+enum AuditLevel {
+  NONE  = "none",                     // read-only, no audit
+  LOG   = "log",                      // invocation logged, result not stored
+  FULL  = "full"                      // invocation + input + result stored in proof chain
+}
+```
+
+### 9.5 Defined Functions
+
+These are the critical business logic units for GTB. Each is versioned, auditable, and callable by Action Types.
+
+---
+
+#### Function: deriveEdgeState
+
+Derives current edge state from proof chain event replay.
+
+```typescript
+Function: deriveEdgeState
+  version: "1.0.0"
+  inputs:
+    - proofChain: ProofChain
+  output: EdgeState
+  logic: |
+    Replay proof chain events in sequence order.
+    Current state = state implied by most recent non-superseded event.
+    
+    Event → State mapping:
+      PROOF_ASSERTED    → Proposed (if first event) or Verified
+      PROOF_VERIFIED    → Active
+      PROOF_EXPIRED     → Suspended
+      PROOF_CHALLENGED  → Disputed
+      PROOF_RESOLVED    → Active (if challenge resolved in favor)
+      PROOF_INVALIDATED → Terminated
+      PROOF_SUPERSEDED  → state of superseding record
+  dependencies: []
+  auditLevel: LOG
+```
+
+**Used by:** All edge state queries, `GET /entities/{id}/relationships`, projection refresh pipelines.
+
+---
+
+#### Function: validateMandateScope
+
+Validates that an agent action falls within mandate scope.
+
+```typescript
+Function: validateMandateScope
+  version: "1.0.0"
+  inputs:
+    - agentMandate: AgentMandate
+    - operation: OperationType
+    - amount?: Decimal
+    - currency?: string
+    - constraints?: Constraint[]
+  output: ValidationResult {
+    valid: boolean
+    violations: ScopeViolation[]
+    remainingLimit?: Decimal
+  }
+  logic: |
+    1. Verify AgentMandate.state == Active
+    2. Verify effectiveFrom <= now <= effectiveTo
+    3. Verify operation ∈ permittedOperations
+    4. If amount provided, verify amount <= limits.maxAmount
+    5. If currency provided, verify currency == limits.currency
+    6. Verify all constraints satisfied (e.g., same_day_only, no_external_transfer)
+    7. Verify delegation chain intact (each link verified and non-expired)
+    
+    Return valid=true with remainingLimit, or valid=false with violations[]
+  dependencies: [deriveEdgeState]  // to verify delegation link states
+  auditLevel: FULL
+```
+
+**Used by:** `POST /mandates/{agentId}/validate`, all agent-initiated Action Types.
+
+---
+
+#### Function: computeProductEligibility
+
+Computes whether a Party is eligible for a ProductDefinition.
+
+```typescript
+Function: computeProductEligibility
+  version: "1.0.0"
+  inputs:
+    - party: IIsRegulatable  // uses interface — works for LegalEntity, NaturalPerson, FinancialInstitution
+    - productDefinition: ProductDefinition
+  output: EligibilityResult {
+    eligible: boolean
+    reasons: EligibilityReason[]     // why eligible or why not
+    blockingIssues: BlockingIssue[]  // must be resolved before eligible
+  }
+  logic: |
+    1. Check KYC status: party must have Active isKnownBy edge to relevant regulators
+       - Payment rails: FINTRAC + FinCEN for CAD/USD; FCA for GBP; MAS for SGD
+       - FX hedging: FINTRAC + FinCEN minimum
+       - Cash pooling: FINTRAC minimum (plus jurisdiction per participant)
+    2. Check sanctions: party must not have Active isScreenedAgainst edge with FAILED status
+    3. Check product-specific requirements:
+       - Cash Pooling: party must be within EntityGroup of Pool Master
+       - FX Hedging: party must have HumanMandate for treasury activities
+       - Intercompany Lending: party must be within EntityGroup; credit limit available
+       - Payment Rails: currency/geography must match rail eligibility matrix
+    4. Check existing subscriptions: no duplicate active subscription to same ProductInstance
+    
+    Return eligible=true with reasons, or eligible=false with blockingIssues
+  dependencies: [deriveEdgeState]  // to check KYC edge states
+  auditLevel: LOG
+```
+
+**Used by:** `GET /entities/{id}/relationships?filter=eligible`, onboarding workflows, self-service portal.
+
+---
+
+#### Function: computeSigningAuthority
+
+Determines if a NaturalPerson has signing authority for a payment amount.
+
+```typescript
+Function: computeSigningAuthority
+  version: "1.0.0"
+  inputs:
+    - person: NaturalPerson
+    - legalEntity: LegalEntity
+    - amount: Decimal
+    - currency: string
+  output: AuthorityResult {
+    authorized: boolean
+    tier: SigningTier              // solo | dual | board
+    requiredApprovals: number      // how many signatures needed
+    currentApprovals: number       // how many provided so far
+    limit: Decimal                 // max amount for this authority level
+  }
+  logic: |
+    1. Traverse hasSigningAuthority edges from person to legalEntity
+    2. If no edge, return authorized=false
+    3. If edge exists, check edge state (must be Active via deriveEdgeState)
+    4. Evaluate signing authority matrix:
+       - amount <= tier1Limit → solo signature
+       - tier1Limit < amount <= tier2Limit → dual signature
+       - amount > tier2Limit → board resolution required
+    5. Return authority result with tier and approval requirements
+  dependencies: [deriveEdgeState]
+  auditLevel: FULL
+```
+
+**Used by:** `InitiatePayment` pre-flight, dual-signature workflows, approval routing.
+
+---
+
+#### Function: computePoolInterest
+
+Computes interest posting for a cash pool.
+
+```typescript
+Function: computePoolInterest
+  version: "1.0.0"
+  inputs:
+    - pool: NotionalPool | PhysicalPool
+    - valuationDate: ISO8601
+  output: InterestCalculation {
+    participants: InterestParticipant[]
+    totalInterest: Decimal
+    currency: string
+  }
+  logic: |
+    1. For each pool member account:
+       a. Retrieve balance at valuationDate (point-in-time query)
+       b. Determine applicable interest rate (based on account type, jurisdiction, agreement)
+       c. Compute daily interest = balance * rate / 365
+    2. Aggregate per participant
+    3. Apply pool-level interest allocation rules (pro-rata, fixed, or negotiated)
+    4. Return per-participant interest amounts
+  dependencies: []
+  auditLevel: FULL
+```
+
+**Used by:** Daily interest posting jobs, `InterestPosting` node creation.
+
+---
+
+#### Function: validateTransferPricing
+
+Validates arm's-length pricing for intercompany transactions.
+
+```typescript
+Function: validateTransferPricing
+  version: "1.0.0"
+  inputs:
+    - lender: LegalEntity
+    - borrower: LegalEntity
+    - amount: Decimal
+    - currency: string
+    - interestRate: Decimal
+    - transactionDate: ISO8601
+  output: TransferPricingResult {
+    compliant: boolean
+    benchmarkRate: Decimal           // applicable benchmark (SOFR + spread)
+    deviation: Decimal               // difference from benchmark
+    jurisdiction: string             // governing tax jurisdiction
+    warning?: string                 // if deviation is within tolerance but notable
+  }
+  logic: |
+    1. Determine governing tax jurisdiction (borrower's primary jurisdiction)
+    2. Retrieve applicable benchmark rate (SOFR/EURIBOR + jurisdiction-specific spread)
+    3. Compute deviation = |interestRate - benchmarkRate|
+    4. Check against jurisdiction tolerance threshold:
+       - Canada (CRA): ±50 bps
+       - US (IRS): ±25 bps
+       - UK (HMRC): ±50 bps
+    5. Return compliant=true if within tolerance, or compliant=false with deviation details
+  dependencies: []
+  auditLevel: FULL
+```
+
+**Used by:** `DrawdownIntercompanyFacility` pre-flight, regulatory reporting.
+
+---
+
+### 9.6 Two-Phase Write Model
+
+High-stakes operations use a two-phase write model inspired by Palantir's branching/proposal pattern. Not all operations need this — only those where an incorrect write has material business or regulatory consequence.
+
+**Governance modes:**
+
+| Mode | When Used | Behavior |
+|------|-----------|----------|
+| `IMMEDIATE` | Time-critical operations (payments, sweeps, FX execution) | Effect applies on invocation; proof record appended; edge state updates | 
+| `PROPOSED` | New relationship assertions | Effect exists in pending state; requires explicit review action to transition to Active |
+| `REVIEWED` | Routine with oversight (intercompany drawdowns, product subscriptions) | Effect applies immediately but triggers async review; if review fails, effect is rolled back via compensating action |
+
+**Two-phase flow for `PROPOSED` actions:**
+```
+Phase 1: Propose
+  Actor invokes AssertRelationship
+  → Edge created in Proposed state
+  → ProofChain created with initial PROOF_ASSERTED record
+  → Edge is visible but not Active (not counted in operational queries)
+
+Phase 2: Review
+  Reviewer invokes ReviewRelationshipProposal
+  → If approved: PROOF_VERIFIED appended → edge transitions to Active
+  → If rejected: PROOF_INVALIDATED appended → edge transitions to Terminated
+  → Reviewer identity and rationale captured in proof record
+```
+
+**Compensating actions for `REVIEWED` mode:**
+```
+Phase 1: Execute
+  Actor invokes DrawdownIntercompanyFacility
+  → Payment created, funds moved, proof records appended
+  → Async review triggered (transfer pricing validation, compliance check)
+
+Phase 2: Review (async, within SLA window)
+  → If review passes: no action needed; operation stands
+  → If review fails: CompensatingDrawdown action invoked
+    - Creates Reversal transaction
+    - Restores credit limit availability
+    - Appends PROOF_CHALLENGED + PROOF_INVALIDATED records
+    - Alerts originating actor
+```
+
+**SLA windows:**
+| Action Type | Review SLA | Escalation |
+|-------------|-----------|------------|
+| Intercompany Drawdown | 4 hours | Treasury Manager |
+| Product Subscription | 24 hours | Relationship Manager |
+| New Relationship Assertion | 48 hours | Compliance Officer |
+
+---
+
+### 9.7 Kinetic Layer Architecture
+
+```                    ┌─────────────────────────────────────────┐
+                    │              Ontology                     │
+                    │                                          │
+                    │  ┌──────────┐  ┌──────────┐  ┌────────┐ │
+                    │  │ Objects  │  │  Links   │  │Actions │ │
+                    │  │ (nouns)  │◄─┤ (relate) │  │ (verbs)│ │
+                    │  └────┬─────┘  └──────────┘  └───┬────┘ │
+                    │       │                           │      │
+                    │  ┌────▼─────┐  ┌──────────┐  ┌───▼────┐ │
+                    │  │Interfaces│  │Functions │  │Govern- │ │
+                    │  │(polymorph)│ │(logic)   │  │nance   │ │
+                    │  └──────────┘  └──────────┘  └────────┘ │
+                    └─────────────────────────────────────────┘
+                              │                 │
+                     ┌────────▼────────┐  ┌────▼──────────┐
+                     │ Entity Platform  │  │  Proof        │
+                     │ API (transport)  │  │  Registry     │
+                     │ REST endpoints   │  │  (audit trail)│
+                     └──────────────────┘  └───────────────┘
+                              │
+                     ┌────────▼────────┐
+                     │  Projections    │
+                     │  (read views)   │
+                     │  CB / CM / WM   │
+                     └─────────────────┘
+```
+
+**Key principle:** The kinetic layer is not a separate service. It is declared within the ontology itself. Action Types and Functions are ontology metadata — they define what operations exist and what rules govern them. The Entity Platform API is the transport that executes these declared operations against the canonical graph.
+
+---
+
+## 11. Technology Options
+
+### Graph Store
+| Option | Fit | Notes |
+|--------|-----|-------|
+| **Neo4j** | High | Native graph, mature Cypher query language, enterprise support |
+| **Amazon Neptune** | High | Managed, supports both RDF and property graph, good for regulated environments |
+| **Apache AGE** (Postgres extension) | Medium | Good if existing Postgres infrastructure, lower operational overhead |
+| **Databricks + Delta Lake** | Medium | Better for analytical projections than operational graph traversal |
+
+**Recommendation:** Neo4j for canonical graph store. Databricks for analytical projections. Connect via Entity Platform API — consuming systems never touch graph store directly.
+
+### Proof Registry Store
+The Proof Registry must be append-only with cryptographic integrity. Options:
+- **PostgreSQL with insert-only policy + hash chain** — simplest, audit-friendly
+- **Apache Kafka + compacted topics** — event-sourced naturally, high throughput
+- **Amazon QLDB** — purpose-built immutable ledger, good regulatory narrative
+
+**Recommendation:** QLDB for proof registry (immutable ledger is the right abstraction and simplifies regulatory examination conversations).
+
+### Ontology Layer
+- **OWL/RDF** for the formal ontology definition (FIBO-aligned)
+- **JSON-LD** for API serialisation of graph data
+- **Protobuf** for high-throughput internal messaging
+
+### Business Rule Engine
+The kinetic layer's Functions and Action Type pre-flight rules require a business rule evaluation engine. Options:
+- **Drools** — mature Java-based rule engine; good for complex rule sets with versioning
+- **Camunda/Felicia** — lighter-weight; good for rule-DAG evaluation
+- **Custom DSL** — domain-specific rule language compiled to graph queries; maximum domain alignment but highest build cost
+
+**Recommendation:** Start with a lightweight rule evaluation layer (Felicia or custom expression engine) that compiles rule expressions to graph queries. Avoid heavy rule engines until rule complexity demands them. The key requirement is that rules are declared in the ontology, not hidden in code.
 
 ### Graph Store
 | Option | Fit | Notes |
@@ -661,7 +1368,7 @@ The Proof Registry must be append-only with cryptographic integrity. Options:
 
 ---
 
-## 10. Key Invariants
+## 12. Key Invariants
 
 These rules must be enforced at the application layer. They are not suggestions.
 
@@ -681,7 +1388,7 @@ These rules must be enforced at the application layer. They are not suggestions.
 
 ---
 
-## 11. Open Questions for Implementation
+## 13. Open Questions for Implementation
 
 These require decisions before Phase 1 completion:
 
