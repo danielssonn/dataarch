@@ -1,0 +1,54 @@
+graph TB
+
+    subgraph CLIENT["ACME Corp — Single Client View"]
+        LE["LegalEntity<br/>ACME Corp Canada<br/>LEI: 549300XXX"]
+    end
+
+    subgraph PRODUCTS["Product Lines"]
+        CP["Cash Pooling<br/>Pool Master"]
+        FX["FX Hedging<br/>3 Forward Contracts"]
+        IC["Intercompany Lending<br/>£5M / £20M Facility"]
+        PR["Payment Rails<br/>ACH + Fedwire + CHAPS"]
+    end
+
+    subgraph ACCOUNTS["Accounts"]
+        A1["ACME-CA-OP-001<br/>(CAD)"]
+        A2["ACME-US-OP-001<br/>(USD)"]
+        A3["ACME-UK-OP-001<br/>(GBP)"]
+        POOL["NotionalPool<br/>ACME-CAD-Pool"]
+    end
+
+    subgraph REG["Regulatory Exposure"]
+        FIN["FINTRAC<br/>✅ KYC Complete"]
+        FCEN["FinCEN<br/>✅ KYC Complete"]
+        FCA["FCA<br/>⏳ KYC Pending"]
+    end
+
+    LE -->|"owns"| A1
+    LE -->|"owns"| A2
+    LE -->|"owns"| A3
+
+    LE -->|"isSubscribedTo"| CP
+    LE -->|"isSubscribedTo"| FX
+    LE -->|"isSubscribedTo"| IC
+    LE -->|"isSubscribedTo"| PR
+
+    A1 -->|"isPartOf"| POOL
+    A2 -->|"isPartOf"| POOL
+
+    LE -->|"isKnownBy"| FIN
+    LE -->|"isKnownBy"| FCEN
+    LE -->|"isKnownBy"| FCA
+
+    CP -->|"manages"| A1
+    CP -->|"manages"| A2
+    CP -->|"manages"| POOL
+
+    FX -->|"settlesAgainst"| A2
+    IC -->|"settlesAgainst"| A3
+    PR -->|"settlesAgainst"| A1
+
+    style CLIENT fill:#e94560,stroke:#fff,color:#fff
+    style PRODUCTS fill:#0f3460,stroke:#533483
+    style ACCOUNTS fill:#162447,stroke:#1f4068
+    style REG fill:#1a1a2e,stroke:#e94560

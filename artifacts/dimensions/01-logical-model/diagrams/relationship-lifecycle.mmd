@@ -1,0 +1,34 @@
+stateDiagram-v2
+    [*] --> Proposed : Relationship asserted
+
+    Proposed --> Verified : Proof validated
+    Proposed --> Disputed : Conflicting evidence
+
+    Verified --> Active : Proof chain complete
+    Verified --> Disputed : Challenge raised
+
+    Active --> Suspended : Proof link challenged / expired
+    Active --> Terminated : Termination proof recorded
+    Active --> Disputed : Conflicting proof submitted
+
+    Suspended --> Active : Challenge resolved / re-attested
+    Suspended --> Terminated : Not reinstated
+
+    Disputed --> Active : Resolution favors assertion
+    Disputed --> Terminated : Resolution invalidates
+
+    Terminated --> [*]
+    Active --> [*] : Normal end
+
+    note right of Disputed
+        State transitions driven
+        by proof chain events only.
+        No direct field updates.
+    end note
+
+    note right of Suspended
+        Auto-suspended when:
+        - KYC expires
+        - Mandate expires
+        - Proof link challenged
+    end note

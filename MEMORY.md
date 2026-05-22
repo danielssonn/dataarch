@@ -9,7 +9,7 @@
 #### Five Architecture Dimensions (Memory Files)
 | # | File | Bytes | Status |
 |---|------|-------|--------|
-| 01 | `memory/dimensions/01-logical-model.md` | ~3.8K | ✅ Rebuilt — entity taxonomy, edge types, product architecture scope, relationship lifecycle model, intent-first ontology tenet #2, dual containment model, KYC/AML in-scope decision |
+| 01 | `memory/dimensions/01-logical-model.md` | ~6.5K | ✅ Expanded 2026-05-22 — entity catalog (17.7K, all 4 product lines), relationship scenarios (17.2K, 7 validated workflows), 5 Mermaid diagrams + PNGs, 5 new node subtypes added, `creates` edge recommended, compound settlement validated |
 | 02 | `memory/dimensions/02-materialization-strategy.md` | ~3.9K | ✅ Rebuilt — Delta Lake/Databricks append-only tables, Liquid Clustering per table, Unity Catalog governance plane (tb_canonical + LOB catalogs), CDF pipelines (~4 defined: integrity sweep 15min, KPI hourly, CB projection refresh, entitlement snapshot), canonical metrics/KPI targets |
 | 03 | `memory/dimensions/03-platform-infrastructure.md` | ~5.0K | ✅ Rebuilt — Databricks on Azure locked as analytical layer, Neo4j recommended for operational graph store (two-store architecture pending POC validation), QLDB proof registry recommendation, Unity Catalog topology + 31-step DDL execution order, RLS via domain_scope ARRAY\<STRING\>, compute targets (<5ms entitlement) |
 | 04 | `memory/dimensions/04-api-integration-contract.md` | ~4.6K | ✅ Rebuilt — Entity Platform API surface (REST endpoints for entity resolution by ID/LEI, relationship traversal including ownership-chain/beneficial-owners/regulatory-exposure), point-in-time queries via ?asOf={timestamp}, proof chain retrieval at any historical moment, sole write path to canonical data, LEI as canonical identity invariant |
@@ -23,9 +23,21 @@
 #### Artifacts Directory Structure:
 ```
 artifacts/dimensions/                    ← per-dimension specs/research/diagrams
-├── 01-logical-model/specs/canonical-graph-spec.md     (697 lines, ~32K — full Architecture spec migrated here)
-├── 02-materialization-strategy/research/impact-analysis.md (~16K architectural impact analysis)  
-├── 03-platform-infrastructure/specs/ddl-readme.md      (DDL execution order + Unity Catalog mapping)
+├── 01-logical-model/
+│   ├── specs/canonical-graph-spec.md          (697 lines, ~32K — full Architecture spec)
+│   ├── research/entity-catalog.md             (~17.7K — all 4 product lines mapped)
+│   ├── research/relationship-scenarios.md     (~17.2K — 7 validated workflows)
+│   └── diagrams/                              (5 .mmd + 5 .png)
+│       ├── entity-taxonomy.{mmd,png}
+│       ├── relationship-lifecycle.{mmd,png}
+│       ├── product-hierarchy.{mmd,png}
+│       ├── dual-containment.{mmd,png}
+│       └── cross-product-view.{mmd,png}
+├── 02-materialization-strategy/research/impact-analysis.md (~16K architectural impact analysis)
+├── 03-platform-infrastructure/specs/
+│   ├── ddl-readme.md                          (DDL execution order + Unity Catalog mapping)
+│   ├── infrastructure-architecture.md         (two-store vs consolidated comparison)
+│   └── platform-topology.md                   (component topology + network zones)
 └── 05-governance-trust-layer/specs/stakeholder-engagement.md
 
 artifacts/research/txnbankingdatamodel/    ← source research directory (original uncommitted files, still present as reference)

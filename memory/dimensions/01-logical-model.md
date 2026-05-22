@@ -52,7 +52,44 @@ State transitions driven by proof chain events, never direct field updates.
 3. **KYC/AML/Sanctions in-scope as core, not bolt-on** — compliance entities are foundational graph nodes (Regulator, RegulatoryObligation), jurisdictional requirements vary across FINTRAC/FinCEN/FCA simultaneously on same corporate group structure; geographic scoping applies per Nexus Global reference case
 4. **Materialisation always derived from the graph** — "the graph is never derived from materialisation"
 
+## Expanded Content (2026-05-22)
+
+### Entity Catalog (`research/entity-catalog.md` — ~17.7K)
+Full entity catalog covering all four GTB product lines. Key additions vs. original spec:
+- **5 new node subtypes:** `PhysicalPool` (physical fund sweeping vs. notional), `InterestPosting`, `SweepTransaction`, `Reversal`, `SettlementObligation`
+- **Product hierarchy validated:** `ProductBundle` as composite first-class node; Cash Pooling modeled as bundle containing OperatingAccount × 2 + NotionalPool + Sweep Service + Reporting
+- **Complete product-line mapping table:** Every business concept across Cash Pooling, FX Hedging, Intercompany Lending, Payment Rails mapped to canonical node types
+- **Cross-product-line relationships documented:** Single LegalEntity node with subscriptions to 4 product bundles; single OperatingAccount with settlesAgainst edges from multiple transaction types
+- **No coverage gaps identified** — all 4 product lines fully covered by existing or newly-added node types
+
+### Relationship Scenarios (`research/relationship-scenarios.md` — ~17.2K)
+7 real-world client scenarios validating edge taxonomy:
+1. **New Client Onboarding + Cash Pool Setup** — 12 edge types used, all covered
+2. **FX Forward Hedge Execution** — identified new `creates` edge (ProductInstance → SettlementObligation)
+3. **Intercompany Loan Drawdown** — validated compound settlements (multiple `settlesAgainst` per transaction)
+4. **Payment Initiation + Sanctions Screening** — proof chain handles screening/approval without new edges
+5. **Relationship Suspension + Reinstatement** — state machine validated via proof chain events
+6. **Agent-Initiated Pool Sweep** — full agentic proof chain with 3-level delegation trace
+7. **Cross-LOB Client View** — graph traversal produces complete view without joining operational DBs
+
+### Diagrams (`diagrams/` — 5 Mermaid + 5 PNG)
+| Diagram | Source | PNG Size |
+|---------|--------|----------|
+| Entity Taxonomy | `entity-taxonomy.mmd` | 18.9K |
+| Relationship Lifecycle | `relationship-lifecycle.mmd` | 40.1K |
+| Product Hierarchy | `product-hierarchy.mmd` | 38.8K |
+| Dual Containment Model | `dual-containment.mmd` | 48.6K |
+| Cross-Product Client View | `cross-product-view.mmd` | 33.5K |
+
+### Recommended Additions (from scenario validation)
+1. **`creates`** edge: `ProductInstance → creates → SettlementObligation` (validated by FX Hedge scenario)
+2. **Multiple `settlesAgainst` edges per transaction** (validated by Intercompany Lending + Sweep scenarios)
+
 ## Open Questions
-- Complete entity catalog coverage for all four product lines? (current spec covers core types but need to validate against full Maya demo inventory)
-- Cross-product-line relationship definitions finalized and tested against real client scenarios?
-- Product taxonomy completeness validated against vendor system catalogs before DDL generation?
+- Complete entity catalog coverage for all four product lines? ✅ DONE — no gaps identified
+- Cross-product-line relationship definitions finalized and tested against real client scenarios? ✅ DONE — 7 scenarios validated
+- Product taxonomy completeness validated against vendor system catalogs before DDL generation? ⏳ PENDING
+- VirtualAccount vs. OperatingAccount routing — when does a payment target a VirtualAccount that routes to OperatingAccount?
+- ProductBundle pricing — should pricing be a property of Bundle/Instance or a separate Pricing node?
+- Multi-currency accounts — one OperatingAccount with currency sub-accounts, or multiple nodes per currency?
+- Hedge accounting classification — IFRS 9 effectiveness testing as dedicated edge or SettlementObligation property?

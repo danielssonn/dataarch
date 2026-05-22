@@ -1,0 +1,75 @@
+flowchart TD
+
+    subgraph CANONICAL["Canonical Graph — Entity Taxonomy"]
+        direction TB
+
+        subgraph PARTY["Party"]
+            LE["LegalEntity"]
+            LE2["├─ Corporation"]
+            LE3["├─ Partnership"]
+            LE4["├─ Trust"]
+            LE5["├─ Sovereign"]
+            NP["NaturalPerson"]
+            FI["FinancialInstitution"]
+            REG["Regulator"]
+        end
+
+        subgraph GROUP["EntityGroup"]
+            UP["UltimateParent"]
+            CG["ConsolidatedGroup"]
+        end
+
+        subgraph PRODUCT["Product"]
+            PD["ProductDefinition"]
+            PI["ProductInstance"]
+            PB["ProductBundle"]
+        end
+
+        subgraph ACCOUNT["Account"]
+            OA["OperatingAccount"]
+            VA["VirtualAccount"]
+            NP2["NotionalPool"]
+            PP["PhysicalPool"]
+            TA["TradingAccount"]
+            CA["CustodyAccount"]
+        end
+
+        subgraph TXN["Transaction"]
+            PAY["Payment"]
+            TT["TradeTransaction"]
+            FX["FXTransaction"]
+            FEE["Fee"]
+            IP["InterestPosting"]
+            ST["SweepTransaction"]
+            REV["Reversal"]
+        end
+
+        subgraph CHAN["Channel"]
+            DP["DigitalPortal"]
+            AP["APIChannel"]
+            H2H["H2HChannel"]
+            SW["SWIFTChannel"]
+        end
+
+        subgraph OBL["Obligation"]
+            RO["RegulatoryObligation"]
+            CO["ContractualObligation"]
+            CRO["CreditObligation"]
+            SO["SettlementObligation"]
+        end
+
+        subgraph MAND["Mandate"]
+            HM["HumanMandate"]
+            AM["AgentMandate"]
+        end
+    end
+
+    style CANONICAL fill:#1a1a2e,stroke:#16213e,stroke-width:2px
+    style PARTY fill:#0f3460,stroke:#e94560
+    style GROUP fill:#1a1a40,stroke:#533483
+    style PRODUCT fill:#0f3460,stroke:#e94560
+    style ACCOUNT fill:#162447,stroke:#1f4068
+    style TXN fill:#1a1a2e,stroke:#e94560
+    style CHAN fill:#0f3460,stroke:#533483
+    style OBL fill:#1a1a2e,stroke:#e94560
+    style MAND fill:#0f3460,stroke:#533483

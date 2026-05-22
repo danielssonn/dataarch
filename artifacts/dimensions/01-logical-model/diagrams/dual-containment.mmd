@@ -1,0 +1,44 @@
+graph TB
+
+    subgraph CORE["Core Model<br/>(Bank-Owned Systems)"]
+        CG["Canonical Graph<br/>Source of Truth"]
+        EP["Entity Platform API"]
+        PROJ["Operational Projections"]
+
+        CG --> EP
+        EP --> PROJ
+    end
+
+    subgraph CONTAINMENT["Containment Zone<br/>(Vendor Data Feeds)"]
+        V1["Vendor System A<br/>(Core Banking)"]
+        V2["Vendor System B<br/>(Payments)"]
+        V3["Vendor System C<br/>(Treasury)"]
+
+        M1["Mapping Layer A"]
+        M2["Mapping Layer B"]
+        M3["Mapping Layer C"]
+
+        V1 --> M1
+        V2 --> M2
+        V3 --> M3
+    end
+
+    subgraph GOVERNANCE["Governance Plane"]
+        ONTO["Common Ontology<br/>(FIBO-aligned)"]
+        QC["Quality Checks"]
+        AUDIT["Temporal Audit"]
+    end
+
+    M1 -->|"progressive mapping"| ONTO
+    M2 -->|"progressive mapping"| ONTO
+    M3 -->|"progressive mapping"| ONTO
+
+    ONTO --> CG
+    CG --> QC
+    QC --> AUDIT
+
+    style CORE fill:#0f3460,stroke:#e94560,stroke-width:2px
+    style CONTAINMENT fill:#1a1a2e,stroke:#533483,stroke-width:2px
+    style GOVERNANCE fill:#162447,stroke:#e94560,stroke-width:2px
+    style CG fill:#e94560,stroke:#fff,color:#fff
+    style ONTO fill:#533483,stroke:#fff,color:#fff

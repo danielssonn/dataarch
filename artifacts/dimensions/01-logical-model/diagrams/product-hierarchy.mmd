@@ -1,0 +1,49 @@
+graph LR
+
+    subgraph PRODUCT_MODEL["Product Taxonomy — Hierarchical Model"]
+        PD["ProductDefinition<br/>(Abstract Template)"]
+
+        PI1["ProductInstance<br/>CAD Operating Account"]
+        PI2["ProductInstance<br/>USD Operating Account"]
+        PI3["ProductInstance<br/>Notional Pool"]
+        PI4["ProductInstance<br/>Intraday Sweep"]
+        PI5["ProductInstance<br/>Balance Reporting"]
+
+        PB["ProductBundle<br/>Multi-Currency Cash Mgmt Suite"]
+
+        PD -.->|"instantiates"| PI1
+        PD -.->|"instantiates"| PI2
+        PD -.->|"instantiates"| PI3
+        PD -.->|"instantiates"| PI4
+        PD -.->|"instantiates"| PI5
+
+        PB -->|"contains"| PI1
+        PB -->|"contains"| PI2
+        PB -->|"contains"| PI3
+        PB -->|"contains"| PI4
+        PB -->|"contains"| PI5
+    end
+
+    subgraph CLIENT["Client Subscription"]
+        CL["LegalEntity<br/>ACME Corp"]
+        CL -->|"isSubscribedTo"| PB
+    end
+
+    subgraph ACCOUNTS["Account Materialization"]
+        OA1["OperatingAccount<br/>ACME-CA-OP-001"]
+        OA2["OperatingAccount<br/>ACME-US-OP-001"]
+        POOL["NotionalPool<br/>ACME-CAD-Pool"]
+
+        PI1 -->|"isGovernedBy"| OA1
+        PI2 -->|"isGovernedBy"| OA2
+        PI3 -->|"isGovernedBy"| POOL
+
+        OA1 -->|"isPartOf"| POOL
+        OA2 -->|"isPartOf"| POOL
+    end
+
+    style PRODUCT_MODEL fill:#1a1a2e,stroke:#533483,stroke-width:2px
+    style CLIENT fill:#0f3460,stroke:#e94560
+    style ACCOUNTS fill:#162447,stroke:#1f4068
+    style PB fill:#e94560,stroke:#fff,color:#fff
+    style PD fill:#533483,stroke:#fff,color:#fff
