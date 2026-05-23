@@ -1,9 +1,9 @@
 # Master Architecture Document
 **Ontology-First Global Transaction Banking Platform**
 
-Version: 3.2
+Version: 3.3
 Date: 2026-05-23
-Status: Draft — control surfaces for Products & Parties
+Status: Draft — expanded proof taxonomy (10 kinds, 6 types, 3 dimensions)
 
 ---
 
@@ -56,7 +56,7 @@ The Global Transaction Banking platform delivers three core capabilities:
 
 ### Differentiator
 
-This platform is **ontology-first and proof-backed**. The canonical graph is not a data warehouse or a semantic layer — it is **the operational interface through which the bank acts on its data**. Every relationship has an append-only, hash-chained proof record. Every automated action has a complete, verifiable delegation chain back to a human with signing authority.
+This platform is **ontology-first and proof-backed**. The canonical graph is not a data warehouse or a semantic layer — it is **the operational interface through which the bank acts on its data**. Every relationship has an append-only, hash-chained proof record covering ten proof kinds (identity through remediation). Every automated action has a complete, verifiable delegation chain back to a human with signing authority. Unlike Palantir's passive audit logs, our proof model actively composes chains that prove not just what happened, but that the right thing happened by the right person under the right authority.
 
 | Capability | Metric | Impact |
 |------------|--------|--------|
@@ -131,15 +131,18 @@ This platform is **ontology-first and proof-backed**. The canonical graph is not
 - LOB applications read from Delta Lake projections
 - Materialization is always derived from the graph, never the other way around
 
-### 2. Proof Is Mandatory
+### 2. Proof Is Mandatory and Composed
 
-**Principle:** Every relationship in the graph has an append-only, hash-chained proof record. An edge without a proof chain is an unverified assertion and is architecturally invalid.
+**Principle:** Every relationship in the graph has an append-only, hash-chained proof record. An edge without a proof chain is an unverified assertion and is architecturally invalid. Proofs are not flat audit logs — they are composed chains that prove identity, authority, intent, execution, compliance, consent, ownership, solvency, delivery, and remediation.
 
 **Implementation:**
 - PostgreSQL proof registry with append-only enforcement (triggers block UPDATE/DELETE)
 - SHA-256 hash chaining between records (tamper-evident)
 - Authority-linked: every proof captures who had the right to act, at what time, under what mandate
-- Six proof types: declarative, behavioural, delegated, agentic, systemic, regulatory
+- Six proof types (source): declarative, behavioural, delegated, agentic, systemic, regulatory
+- Ten proof kinds (truth): identity, authority, intent, execution, compliance, consent, ownership, solvency, delivery, remediation
+- Three cross-cutting dimensions: temporal (validity windows), scope (4-dimensional), confidence (5-level)
+- Composed chains: onboarding, transaction, enrollment, dispute resolution patterns
 
 ### 3. Kinetic Layer — Noun + Verb Integration
 
@@ -546,12 +549,65 @@ POST /containment/map                  — progressive mapping to canonical term
 
 ## The Governance Layer
 
+The Governance Layer is the proof-based differentiation of this platform. It does not just record that something happened — it proves that the right thing happened, by the right person, at the right time, under the right authority, following the right rules.
+
 ### Proof Chain Integrity
 
 - **Append-only enforcement** at storage layer (PostgreSQL triggers)
 - **SHA-256 hash chaining** between records (tamper-evident)
 - **15-minute integrity sweep** validates chain continuity
 - **Current state derived from event replay** — never from a status field
+
+### Proof Type Taxonomy (Source of Assertion)
+
+Six proof types classify **who/what** is making the claim:
+
+| Type | Source | Example |
+|------|--------|---------|
+| `DECLARATIVE` | Human via formal instrument | Signed agreement, board resolution |
+| `BEHAVIOURAL` | Human via authenticated action | Portal click-through, consent capture |
+| `DELEGATED` | Authority chain | OAuth scope, power of attorney |
+| `AGENTIC` | Non-human under mandate | AI agent action under scoped mandate |
+| `SYSTEMIC` | Bank's own execution record | Audit log, transaction record |
+| `REGULATORY` | Third-party attestation | LEI registry, sanctions screening |
+
+### Proof Kind Taxonomy (Kind of Truth)
+
+Ten proof kinds classify **what** is being proven. This is the dimension that maps directly to regulatory domains and business processes:
+
+| Kind | What It Proves | Regulatory Domain | Nexus Global Example |
+|------|---------------|-------------------|---------------------|
+| **Identity** | Who you are | KYC, CDD, AML, PEP | Maya's passport + LEI + liveness check |
+| **Authority** | What you can do | Mandate mgmt, signing authority | Maya's $5M FX mandate |
+| **Intent** | What you asked for | Payment execution, non-repudiation | Maya's payment instruction snapshot |
+| **Execution** | What was done | Operational compliance, SLA | Bank executed Maya's payment correctly |
+| **Compliance** | Rules were followed | Sanctions, AML, transfer pricing | Pre-flight sanctions/AML/policy checks |
+| **Consent** | You agreed to this | GDPR, product terms | Maya's FX Forward enrollment consent |
+| **Ownership** | You own this | UBO, collateral, account ownership | Nexus Global USA owns OperatingAccount-USA |
+| **Solvency** | You can pay | Credit, margin, counterparty risk | $4M credit capacity > $2M FX request |
+| **Delivery** | You received it | Settlement finality, notification | SWIFT delivery receipt + Maya's acknowledgment |
+| **Remediation** | You fixed it | Error resolution, complaints | FX rate discrepancy corrected and accepted |
+
+### Proof Chain Composition Patterns
+
+Real-world scenarios compose multiple proof kinds into a single lifecycle chain:
+
+| Pattern | Proofs Composed | Use Case |
+|---------|----------------|----------|
+| **Onboarding** | Identity + Authority + Consent + Compliance | New client relationship |
+| **Transaction** | Intent + Authority + Compliance + Execution + Delivery | Payment, FX, trade settlement |
+| **Enrollment** | Identity + Eligibility + Consent + Ownership | Product subscription |
+| **Dispute** | Intent vs. Execution + Remediation | Error resolution |
+
+### Cross-Cutting Proof Dimensions
+
+Every proof record captures three dimensions beyond type and kind:
+
+**Temporal:** `assertedAt`, `effectiveFrom`, `effectiveTo`, `supersededBy` — proofs have validity windows, not just creation timestamps.
+
+**Scope:** Entity scope, action scope, temporal scope, jurisdictional scope — pre-flight validation checks all four dimensions.
+
+**Confidence:** CRYPTOGRAPHIC > INSTITUTIONAL > PROCEDURAL > DECLARATIVE > INFERRED — different regulatory contexts require different minimum confidence levels.
 
 ### Agentic Mandate Model
 
@@ -569,12 +625,29 @@ POST /containment/map                  — progressive mapping to canonical term
 | "Counterparty has valid KYC" | Completed, current, within policy | Documentation contents |
 | "Ownership chain verified" | Each link has valid proof | Intermediate ownership % |
 
+**Primary ZKP use cases by proof kind:**
+- **Identity:** Prove KYC completed without exposing PII documentation
+- **Solvency:** Prove sufficient balance/capacity without exposing account balances
+- **Compliance:** Prove sanctions-clear without exposing screening methodology or client data
+
 ### Security Layers
 
 1. **Append-only enforcement** at storage layer
 2. **Row-Level Security** via `domain_scope` (enforced at SQL and API layers)
 3. **Column-level masking** on sensitive proof fields (auditor-only visibility)
 4. **Temporal auditability** — full point-in-time reconstruction
+
+### Differentiation vs. Palantir
+
+| Aspect | Palantir | Our Platform |
+|--------|----------|--------------|
+| **Proof model** | Audit log (passive) | 10 proof kinds × 6 proof types × 3 cross-cutting dimensions |
+| **Proof composition** | Flat audit trail | Composed chains (onboarding, transaction, enrollment, dispute) |
+| **Temporal reasoning** | Point-in-time queries | Full temporal profile (assertedAt, effectiveFrom/To, supersededBy) |
+| **Scope validation** | RBAC | 4-dimensional scope (entity, action, temporal, jurisdictional) |
+| **Confidence grading** | Not applicable | 5-level confidence (cryptographic → inferred) |
+| **Remediation tracking** | Manual | Proof of Remediation with closed-loop chains |
+| **Regulatory mapping** | Generic | Each proof kind maps to specific regulatory domain |
 
 ---
 
