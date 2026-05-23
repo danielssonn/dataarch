@@ -1,15 +1,22 @@
 # Master Architecture Document
 **Ontology-First Global Transaction Banking Platform**
 
-Version: 3.0
+Version: 3.1
 Date: 2026-05-23
-Status: Draft — driven by ontology-based data platform
+Status: Draft — ontology + kinetic alignment for Products & Parties
 
 ---
 
 ## Document Overview
 
-This is the **master architecture document** for the Global Transaction Banking platform. It describes how the ontology-first, proof-backed data platform (five architectural dimensions) enables the application system (product catalog management, federated party management, workflow orchestration, multi-channel API).
+This is the **master architecture document** for the Global Transaction Banking platform. It describes how the ontology-first, proof-backed data platform (five architectural dimensions) enables the application system.
+
+Two fundamental business constructs drive the entire architecture:
+
+1. **Products** (what we sell) — Product catalog management, configuration, bundling, cross-sell, lifecycle
+2. **Parties** (who we sell to) — Federated party management, entity resolution, ownership chains, context resolution
+
+Every service, every workflow, every API call ultimately resolves to these two constructs and their relationships in the canonical graph. The ontology layer defines them. The kinetic layer makes them operational. The API layer exposes them. The proof layer governs them.
 
 Previous versions described a MongoDB-based architecture. This version replaces that foundation with a three-tier operational store (Neo4j + PostgreSQL + Redis) plus Delta Lake analytics, while retaining the correct application-layer decisions (microservices, Temporal, Kafka, API Gateway, AI agents).
 
@@ -246,11 +253,30 @@ Node
 
 ### Action Types (Declared Operations)
 
+Actions are grouped by domain. Each action is declared in the ontology with pre-flight rules, effects, and governance mode.
+
+#### Party & Relationship Actions
+
 | Action | Governance Mode | Description |
 |--------|----------------|-------------|
 | `AssertRelationship` | PROPOSED | New counterparty relationship requires compliance review |
 | `ReviewRelationshipProposal` | IMMEDIATE | Approve/reject pending relationship assertions |
 | `ApproveKYCRenewal` | IMMEDIATE | Compliance officer approval |
+
+#### Product Lifecycle Actions
+
+| Action | Governance Mode | Description |
+|--------|----------------|-------------|
+| `SubmitProductConfiguration` | IMMEDIATE | Submit product instance for approval |
+| `ApproveProductConfiguration` | IMMEDIATE | Approver signs off; mandate-validated |
+| `ActivateProduct` | IMMEDIATE | Product goes live; proof of activation recorded |
+| `DeprecateProduct` | PROPOSED | Product retirement; requires compliance review |
+| `ModifyProductPricing` | REVIEWED | Pricing change; executes immediately, async compliance review |
+
+#### Transaction Actions
+
+| Action | Governance Mode | Description |
+|--------|----------------|-------------|
 | `InitiatePayment` | IMMEDIATE | Time-critical; pre-flight sanctions check |
 | `ExecuteFXForward` | IMMEDIATE | Market execution; mandate-governed |
 | `DrawdownIntercompanyFacility` | REVIEWED | Executes immediately; async compliance review with compensating action |
@@ -258,12 +284,29 @@ Node
 
 ### Functions (Versioned Business Logic)
 
+Functions are versioned, stored in `kinetic.function_definitions`, and evaluated by the platform.
+
+#### Party & Governance Functions
+
 | Function | Purpose |
-|----------|---------|
+|----------|---------||
 | `deriveEdgeState` | Derives current relationship state from proof chain replay |
 | `validateMandateScope` | Pre-flight agent mandate validation (<1ms) |
-| `computeProductEligibility` | KYC, sanctions, and product-specific checks |
 | `computeSigningAuthority` | Tiered signing limits (solo/dual/board) |
+
+#### Product Functions
+
+| Function | Purpose |
+|----------|---------|
+| `computeProductEligibility` | KYC, sanctions, and product-specific checks for party-product fit |
+| `computeProductPricing` | Pricing from template + tenant override + volume discount |
+| `validateBundleComposition` | Bundle integrity check (no circular deps, pricing conflicts) |
+| `computeCrossSellRecommendations` | Graph-based recommendations (co-adoption, category affinity) |
+
+#### Transaction Functions
+
+| Function | Purpose |
+|----------|---------|
 | `computePoolInterest` | Daily interest posting for cash pools |
 | `validateTransferPricing` | Arm's-length pricing for intercompany transactions |
 
@@ -285,7 +328,6 @@ The kinetic layer makes the ontology operational. It stores the state machines t
 | `kinetic.proposed_edges` | Two-phase write: edges awaiting review |
 | `kinetic.review_queue` | Ordered queue of items awaiting review |
 | `kinetic.compensating_actions` | Compensation for REVIEWED governance mode failures |
-| `kinetic.proposed_edges` | Two-phase write state machine |
 
 ### Proof Registry (PostgreSQL)
 
@@ -358,22 +400,42 @@ GET  /entities/{id}/relationships      — all edges from node
 #### Ontology Actions (Write)
 ```
 POST /actions/{actionType}             — execute declared action
+
+Party & Relationship:
      /actions/assert-relationship
      /actions/review-relationship-proposal
+     /actions/approve-kyc-renewal
+
+Product Lifecycle:
+     /actions/submit-product-configuration
+     /actions/approve-product-configuration
+     /actions/activate-product
+     /actions/deprecate-product
+     /actions/modify-product-pricing
+
+Transactions:
      /actions/initiate-payment
      /actions/execute-fx-forward
      /actions/drawdown-intercompany-facility
      /actions/initiate-pool-sweep
-     /actions/approve-kyc-renewal
 ```
 
 #### Function Evaluation (Read/Compute)
 ```
 POST /functions/{functionName}/evaluate
+
+Party & Governance:
      /functions/derive-edge-state
      /functions/validate-mandate-scope
-     /functions/compute-product-eligibility
      /functions/compute-signing-authority
+
+Product:
+     /functions/compute-product-eligibility
+     /functions/compute-product-pricing
+     /functions/validate-bundle-composition
+     /functions/compute-cross-sell-recommendations
+
+Transaction:
      /functions/compute-pool-interest
      /functions/validate-transfer-pricing
 ```
@@ -517,7 +579,7 @@ POST /containment/map                  — progressive mapping to canonical term
 
 ## Application Services
 
-The application layer sits above the data platform. Services consume the ontology through the Entity Platform API and expose domain-specific capabilities.
+The application layer sits above the data platform. Two fundamental business constructs drive everything: **Products** (what we sell) and **Parties** (who we sell to). Every service, every workflow, every API call ultimately resolves to these two constructs and their relationships in the canonical graph.
 
 ### Service Architecture
 
@@ -543,10 +605,108 @@ The application layer sits above the data platform. Services consume the ontolog
      ┌──────────────┐ ┌──────────────┐   ┌─────────────────┐ ┌────────────┐
      │ Auth Service │ │Party Service │   │  Business        │ │ Workflow   │
      │   (8084)     │ │   (8083)     │   │  Services        │ │   (8089)   │
+     │              │ │              │   │                  │ │            │
+     │ JWT +        │ │ Context      │   │ Product,         │ │ Temporal   │
+     │ Principal    │ │ Resolution   │   │ Bundle,          │ │ + DMN +    │
+     │ Mgmt         │ │ via Neo4j    │   │ Cross-Sell       │ │ Claude MCP │
+     └──────────────┘ └──────────────┘   └─────────────────┘ └────────────┘
+            │                  │                    │               │
+            ▼                  ▼                    ▼               ▼
+     ┌──────────────┐ ┌──────────────┐   ┌─────────────────┐ ┌────────────┐
+     │  PostgreSQL  │ │    Neo4j     │   │    Neo4j        │ │ PostgreSQL │
+     │  (Auth       │ │  (Party      │   │  (Product       │ │  (Kinetic  │
+     │   Principals)│ │   Graph)     │   │   Ontology)     │ │   Layer)   │
      └──────────────┘ └──────────────┘   └─────────────────┘ └────────────┘
 ```
 
-### Context Resolution Architecture
+---
+
+### Federated Party Management
+
+**Purpose:** Unified graph-based view of all parties across Commercial Banking, Cash Management, and Wealth Management. This is the WHO — every product subscription, every payment, every relationship traces back to a party.
+
+#### Ontology Alignment
+
+The party domain maps directly to the ontology node types and relationships:
+
+```
+Ontology Node Type          Party Service Implementation
+─────────────────           ──────────────────────────────
+Party                       Base label; all parties have this
+├── LegalEntity             Organizations, corporations, partnerships
+│   ├── Corporation         Standard business entity
+│   ├── Partnership         Multi-party legal structure
+│   ├── Trust               Fiduciary arrangement
+│   └── Sovereign           Government entity
+├── NaturalPerson           Individual humans (UBOs, signers, RMs)
+├── FinancialInstitution    Banks, brokers, custodians
+└── Regulator               OSFI, FCA, SEC, etc.
+
+EntityGroup                 Consolidated views
+├── UltimateParent          Top of ownership hierarchy
+└── ConsolidatedGroup       Regulatory reporting boundary
+```
+
+**Relationship types that define the party graph:**
+
+| Relationship | Direction | Business Purpose | Proof Chain Required |
+|-------------|-----------|-----------------|---------------------|
+| `isSubsidiaryOf` | Child → Parent | Corporate hierarchy | ✅ Yes — ownership evidence |
+| `beneficialOwnerOf` | Person → Entity | UBO identification | ✅ Yes — beneficial ownership declaration |
+| `operatesOnBehalfOf` | Agent → Principal | Agency relationships | ✅ Yes — power of attorney / mandate |
+| `hasAccount` | Party → Account | Account ownership | ✅ Yes — account opening documentation |
+| `subscribedTo` | Party → ProductInstance | Product subscription | ✅ Yes — signed agreement |
+| `employs` | Organization → NaturalPerson | Employment relationship | ✅ Yes — HR record / contract |
+| `regulatedBy` | Party → Regulator | Regulatory jurisdiction | ✅ Yes — regulatory filing |
+| `authorizedBy` | AgentMandate → HumanMandate | Delegation chain | ✅ Yes — mandate documentation |
+
+#### Entity Resolution Pipeline
+
+Three-stage pipeline to detect, resolve, and merge party records:
+
+```
+Stage 1: Detection
+  ├── Input: New party record from source system
+  ├── Matching: LEI, Tax ID, D-U-N-S, fuzzy name matching
+  └── Output: Candidate matches with confidence score
+
+Stage 2: Resolution
+  ├── Score ≥ 0.95 → Auto-merge to existing party
+  ├── Score 0.70–0.94 → Flag for manual review (review_queue)
+  └── Score < 0.70 → Create new party node
+
+Stage 3: Enrichment
+  ├── Add source system provenance (SOURCED_FROM relationship)
+  ├── Add regulatory identifiers (LEI, Tax ID, D-U-N-S)
+  └── Trigger context resolution cache invalidation
+```
+
+#### Federated Party Graph (Nexus Global Example)
+
+```
+Nexus Global (Canada) [LegalEntity:Corporation, LEI:254900XXXX]
+  │
+  ├─[:isSubsidiaryOf]──→ Nexus Global (UltimateParent)
+  │
+  ├─[:hasAccount]──→ OperatingAccount-USA [IHasBalance, IIsSettlementTarget]
+  │
+  ├─[:hasAccount]──→ OperatingAccount-CA [IHasBalance, IIsSettlementTarget]
+  │
+  ├─[:subscribedTo]──→ FX Forward PROD-003 [IHasPricing]
+  │
+  ├─[:subscribedTo]──→ Cash Management PROD-004 [IHasPricing]
+  │
+  ├─[:employs]──→ John Doe [NaturalPerson]
+  │                  │
+  │                  ├─[:beneficialOwnerOf]──→ ABC Corp [25%]
+  │                  └─[:authorizedBy]──→ AgentMandate-001
+  │
+  └─[:regulatedBy]──→ OSFI [Regulator]
+```
+
+Every edge above has a corresponding proof chain in PostgreSQL. The `subscribedTo` edges, for example, have proof records capturing the signed product agreement, the actor who asserted it, their authority basis, and the hash chain linking to prior state.
+
+#### Context Resolution Architecture
 
 **Purpose:** Transform authentication (WHO) into complete processing context (WHAT/WHERE).
 
@@ -570,49 +730,222 @@ JWT (principalId)
 - Cache moved from Caffeine (per-instance) to **Azure Cache for Redis** (shared)
 - Tenant resolution via graph hierarchy eliminates manual `tenantId` in documents
 
+---
+
 ### Product Catalog Management
 
-**Purpose:** Multi-tenant product design, configuration, approval, and lifecycle management.
+**Purpose:** Multi-tenant product design, configuration, approval, and lifecycle management. This is the WHAT — every party subscribes to products, every product has pricing, every product instance has a lifecycle governed by the kinetic layer.
 
-**Data Model (Ontology):**
+#### Ontology Alignment
+
+The product domain maps directly to ontology node types, interfaces, and kinetic state:
+
 ```
-ProductDefinition (template)
-    ├─ pricing_rules
-    ├─ configurable_properties
-    ├─ terms_and_conditions
-    └─ product_category
-         ↓
-ProductInstance (tenant-specific)
-    ├─ pricing (computed from template + tenant override)
-    ├─ features (subset of configurable_properties)
-    └─ lifecycle_status (kinetic property)
-         ↓
-ProductBundle
-    └─ CONTAINS → ProductInstance
+Ontology Node Type          Product Service Implementation
+─────────────────           ──────────────────────────────
+ProductDefinition           Template; reusable across tenants
+│   ├── pricing_rules       Base pricing logic
+│   ├── configurable_properties  Schema of what can vary
+│   ├── terms_and_conditions  Legal framework
+│   └── product_category    LOB classification
+│
+ProductInstance             Tenant-specific instantiation
+│   ├── pricing             Computed from template + tenant override
+│   ├── features            Subset of configurable_properties
+│   └── lifecycle_status    Kinetic property (DRAFT→APPROVED→ACTIVE→DEPRECATED)
+│
+ProductBundle               Composite offering
+    └── CONTAINS → ProductInstance  (relationship, not document)
 ```
 
-**Key Changes from v2:**
-- Product templates stored as **Neo4j ProductDefinition nodes** (not MongoDB documents)
-- Solution instances stored as **Neo4j ProductInstance nodes** + **PostgreSQL kinetic state**
-- Bundles stored as **Neo4j CONTAINS relationships** (not MongoDB documents)
-- Cross-sell rules stored as **PostgreSQL function definitions** (evaluated against Neo4j graph)
+**Interface implementations:**
+
+| Interface | Implemented By | Purpose |
+|-----------|---------------|---------|
+| `IHasPricing` | ProductInstance | Pricing computation across product types |
+| `IIsBundleMember` | ProductInstance | Bundle composition queries |
+| `IIsCrossSellTarget` | ProductInstance | Recommendation engine |
+
+#### Product Lifecycle (Kinetic State Machine)
+
+Product instances follow a lifecycle governed by the kinetic layer:
+
+```
+DRAFT → SUBMITTED → UNDER_REVIEW → APPROVED → ACTIVE → DEPRECATED
+  │         │            │             │          │          │
+  │         │            │             │          │          └─ Action: DeprecateProduct
+  │         │            │             │          └─ Action: ActivateProduct
+  │         │            │             └─ Action: ApproveProductConfiguration
+  │         │            └─ Workflow: DMN rules + approver routing
+  │         └─ Action: SubmitProductConfiguration
+  └─ Action: CreateProductInstance
+```
+
+Each state transition is an **ontology action** executed through the Entity Platform API:
+
+| State Transition | Action Type | Governance Mode | Pre-flight Rules |
+|-----------------|-------------|----------------|------------------|
+| DRAFT → SUBMITTED | `SubmitProductConfiguration` | IMMEDIATE | Tenant validation, pricing within policy |
+| SUBMITTED → UNDER_REVIEW | (automatic via workflow) | IMMEDIATE | None |
+| UNDER_REVIEW → APPROVED | `ApproveProductConfiguration` | IMMEDIATE | Approver mandate validation, DMN rules pass |
+| APPROVED → ACTIVE | `ActivateProduct` | IMMEDIATE | All dependencies resolved |
+| ACTIVE → DEPRECATED | `DeprecateProduct` | PROPOSED | Compliance review, customer notification |
+
+#### Cross-Sell & Bundling (Graph Traversal)
+
+Cross-sell recommendations leverage the graph structure — not MongoDB document queries:
+
+```
+Query: "What products can we offer to parties similar to Nexus Global?"
+
+MATCH
+  (target:Party {id: 'nexus-global'})
+  -[:subscribedTo]->(current:ProductInstance)
+  -[:BELONGS_TO_CATEGORY]->(cat:ProductCategory)
+  <-[:BELONGS_TO_CATEGORY]-(similar:ProductInstance)
+  WHERE NOT (target)-[:subscribedTo]->(similar)
+  AND similar.lifecycle_status = 'ACTIVE'
+RETURN similar, count(*) AS adoptionCount
+ORDER BY adoptionCount DESC
+```
+
+Bundling uses the same graph traversal:
+
+```
+Query: "What products are commonly bundled with Cash Management?"
+
+MATCH
+  (bundle:ProductBundle)
+  -[:CONTAINS]->(cm:ProductInstance {product_category: 'Cash Management'})
+  -[:CONTAINS]->(other:ProductInstance)
+WHERE other <> cm
+RETURN other.product_name, count(*) AS bundleCount
+ORDER BY bundleCount DESC
+```
+
+These queries are **impossible with MongoDB** — they require native graph traversal. They become <5ms with Neo4j indexes.
+
+#### Product Catalog (Nexus Global Example)
+
+```
+ProductDefinition: FX Forward (PROD-003)
+  ├── pricing_rules: { base_spread: 0.5%, volume_discount: true }
+  ├── configurable_properties: { tenor, currency_pairs, settlement_date }
+  └── product_category: "Foreign Exchange"
+       │
+       ├─[:INSTANTIATED_AS]──→ ProductInstance: FX Forward - Nexus Global
+       │    ├── pricing: { base_spread: 0.45% }  ← tenant override
+       │    ├── features: { tenor: [1M, 3M, 6M], currency_pairs: [USD/CAD] }
+       │    ├── lifecycle_status: ACTIVE
+       │    └── implements: [IHasPricing, IIsBundleMember]
+       │
+       └─[:INSTANTIATED_AS]──→ ProductInstance: FX Forward - ABC Corp
+            ├── pricing: { base_spread: 0.55% }  ← different tenant
+            ├── features: { tenor: [1M, 3M], currency_pairs: [USD/EUR] }
+            ├── lifecycle_status: APPROVED
+            └── implements: [IHasPricing]
+
+ProductBundle: Treasury Suite
+  ├─[:CONTAINS]──→ FX Forward (IIsBundleMember)
+  ├─[:CONTAINS]──→ Cash Management (IIsBundleMember)
+  └─[:CONTAINS]──→ Liquidity Pooling (IIsBundleMember)
+```
+
+#### Key Changes from v2
+
+| Aspect | v2 (MongoDB) | v3 (Ontology) |
+|--------|-------------|---------------|
+| Product templates | MongoDB document | Neo4j `ProductDefinition` node |
+| Solution instances | MongoDB document | Neo4j `ProductInstance` node |
+| Bundles | MongoDB document with array | Neo4j `ProductBundle` + `CONTAINS` relationships |
+| Cross-sell rules | MongoDB document | PostgreSQL `function_definitions` + Neo4j traversal |
+| Lifecycle state | MongoDB field | PostgreSQL kinetic state machine |
+| Pricing computation | Application logic | PostgreSQL `computeProductEligibility` function |
+| Approval workflow | MongoDB + Temporal | PostgreSQL kinetic + Temporal + proof registry |
+
+---
 
 ### Intelligent Workflow Orchestration
 
 **Purpose:** Hybrid human-AI approval workflows with regulatory-grade evidentiary chains.
 
-**Workflow Patterns:**
+#### Ontology + Kinetic Alignment
+
+Workflows are not standalone processes — they are the execution surface for ontology actions with REVIEWED or PROPOSED governance modes.
+
+```
+Ontology Action              Kinetic Implementation
+─────────────                ──────────────────────
+Action Type (declared)    →  kinetic.action_types
+    ├── pre_flight_rules  →  kinetic.business_rules
+    ├── governance_mode   →  workflow pattern selection
+    └── effects           →  graph mutations + proof records
+
+Action Instance (runtime) →  kinetic.action_instances
+    ├── status            →  saga state (PENDING→COMPLETED/COMPENSATED)
+    ├── proof_chain_id    →  proof.proof_chains
+    └── compensating_action → kinetic.compensating_actions
+
+Review Queue               →  kinetic.review_queue
+    ├── item_type         →  proposed_edge | reviewed_action
+    ├── review_sla        →  escalation trigger
+    └── assigned_reviewer →  mandate scope check
+```
+
+#### Workflow Patterns
+
 1. **Rule-Based** — DMN tables evaluate business rules; auto-approve or route to approver
 2. **Async Red Flag** — AI agents run in parallel; any red flag terminates immediately
 3. **Sync Enrichment** — AI agents run sequentially to add metadata before DMN evaluation
 4. **Hybrid** — Combination of the above
 
-**Key Changes from v2:**
-- Workflow state stored in **PostgreSQL kinetic tables** (action_instances, review_queue) — not MongoDB
-- Temporal retained for **durable execution** (orthogonal to data stores)
-- DMN rules engine retained for **rule evaluation** (rules stored in PostgreSQL business_rules table)
-- Audit trail replaced by **proof registry** (append-only, hash-chained, authority-linked)
-- AI agent actions require **mandate scope validation** (pre-flight, <1ms)
+#### Workflow Example: Product Configuration Approval
+
+```
+1. Product Manager submits configuration
+   → POST /actions/submit-product-configuration
+   → Action Type governance_mode: IMMEDIATE
+   → Pre-flight: tenant validation, pricing within policy
+   → Effect: ProductInstance.lifecycle_status = SUBMITTED
+   → Proof record appended (actor: Product Manager, authority: ROLE_PRODUCT_MANAGER)
+
+2. Workflow triggered by event
+   → Kafka: solution.configured
+   → Workflow Service creates Temporal workflow
+   → DMN evaluates: pricingVariance = 18.5% > 15% threshold
+   → Routes to VP Finance (mandate scope validated)
+
+3. AI agent runs enrichment (Async Red Flag pattern)
+   → AgentMandate validated (<1ms via Redis)
+   → Agent checks: sanctions, KYC, pricing anomaly
+   → No red flags → workflow continues
+
+4. VP Finance approves
+   → POST /actions/approve-product-configuration
+   → Action Type governance_mode: IMMEDIATE
+   → Pre-flight: approver mandate validation
+   → Effect: ProductInstance.lifecycle_status = APPROVED
+   → Proof record appended (actor: VP Finance, authority: ROLE_APPROVER)
+
+5. Product activated
+   → POST /actions/activate-product
+   → Effect: ProductInstance.lifecycle_status = ACTIVE
+   → Proof record appended
+   → CDC sync: Neo4j → Kafka → Delta Lake
+```
+
+#### Key Changes from v2
+
+| Aspect | v2 (MongoDB) | v3 (Ontology) |
+|--------|-------------|---------------|
+| Workflow state | MongoDB collections | PostgreSQL `kinetic.action_instances` |
+| Audit trail | MongoDB audit logs | PostgreSQL `proof.proof_records` (append-only, hash-chained) |
+| Business rules | DMN engine (in-memory) | PostgreSQL `kinetic.business_rules` + DMN evaluation |
+| Agent actions | Claude MCP (unbounded) | Claude MCP + mandate scope validation (<1ms) |
+| Review queue | MongoDB collection | PostgreSQL `kinetic.review_queue` |
+| Compensation | Manual rollback | PostgreSQL `kinetic.compensating_actions` (saga pattern) |
+
+---
 
 ### Core Banking Integration
 
