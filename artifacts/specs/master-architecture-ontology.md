@@ -1,9 +1,9 @@
 # Master Architecture Document
 **Ontology-First Global Transaction Banking Platform**
 
-Version: 3.1
+Version: 3.2
 Date: 2026-05-23
-Status: Draft — ontology + kinetic alignment for Products & Parties
+Status: Draft — control surfaces for Products & Parties
 
 ---
 
@@ -33,7 +33,8 @@ Previous versions described a MongoDB-based architecture. This version replaces 
 7. [The Analytics Layer](#the-analytics-layer)
 8. [The Governance Layer](#the-governance-layer)
 9. [Application Services](#application-services)
-10. [Integration Architecture](#integration-architecture)
+10. [Control Surfaces](#control-surfaces)
+11. [Integration Architecture](#integration-architecture)
 11. [Security Architecture](#security-architecture)
 12. [Deployment Architecture](#deployment-architecture)
 13. [Performance & Scalability](#performance--scalability)
@@ -862,6 +863,259 @@ ProductBundle: Treasury Suite
 | Lifecycle state | MongoDB field | PostgreSQL kinetic state machine |
 | Pricing computation | Application logic | PostgreSQL `computeProductEligibility` function |
 | Approval workflow | MongoDB + Temporal | PostgreSQL kinetic + Temporal + proof registry |
+
+---
+
+### Control Surfaces
+
+The control surface is the presentation layer that sits atop the Ontology and Kinetic layers. It is what Palantir built with Contour — the surface through which humans interact with the ontology. Without it, the ontology and kinetic layer are invisible infrastructure. With it, they become actionable business tools.
+
+**Principle:** The surface does not contain business logic. It queries the Ontology (what exists) and the Kinetic Layer (what can be done, under what rules) and presents the results to the right human at the right time.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        CONTROL SURFACES                                 │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐  │
+│  │ Product Control  │  │ Party Control    │  │ Governance Console   │  │
+│  │   Surface        │  │   Surface        │  │                      │  │
+│  │                  │  │                  │  │                      │  │
+│  │ Sue defines      │  │ Compliance       │  │ Approver sees        │  │
+│  │ products + rules │  │ officer reviews  │  │ proposed edges       │  │
+│  │                  │  │ entity merges    │  │                      │  │
+│  │ Maya sees        │  │                  │  │ Admin configures     │  │
+│  │ eligible         │  │ RM sees party    │  │ mandates + functions │  │
+│  │ products         │  │ 360 view         │  │                      │  │
+│  └────────┬─────────┘  └────────┬─────────┘  └──────────┬───────────┘  │
+│           │                     │                       │               │
+└───────────┼─────────────────────┼───────────────────────┼───────────────┘
+            │                     │                       │
+            ▼                     ▼                       ▼
+     ┌──────────────┐     ┌──────────────┐      ┌──────────────────┐
+     │   KINETIC    │     │   ONTOLOGY   │      │   PROOF          │
+     │   LAYER      │     │   LAYER      │      │   REGISTRY       │
+     │              │     │              │      │                  │
+     │ eligibility  │     │ ProductDef   │      │ hash-chained     │
+     │ rules        │     │ Party types  │      │ proof records    │
+     │ functions    │     │ Relationships│      │                  │
+     │ governance   │     │ Actions      │      │                  │
+     └──────────────┘     └──────────────┘      └──────────────────┘
+```
+
+---
+
+#### Product Control Surface
+
+**Purpose:** Enable product managers to define products and their eligibility rules, and enable parties to discover and onboard eligible products. Product Catalog is the glue — it connects Ontology (product schema) with Kinetic (eligibility rules) to present the right product to the right party.
+
+**Users & Capabilities:**
+
+| User | Surface | What They See | Driven By |
+|------|---------|--------------|-----------|
+| **Product Manager (Sue)** | Product Definition Console | Create/edit `ProductDefinition` nodes + eligibility rules | Ontology (schema) + Kinetic (rules) |
+| **Relationship Manager** | Party Product Dashboard | Eligible products for assigned parties | Kinetic (`computeProductEligibility`) |
+| **Client (Maya)** | Product Discovery Portal | Products she qualifies for; configure & submit | Kinetic (eligibility) + Ontology (configuration schema) |
+| **Approver (VP Finance)** | Approval Inbox | Product configurations awaiting approval | Kinetic (`review_queue`) |
+
+**Scenario: Sue Defines Term Deposit 001 → Maya Onboards It**
+
+```
+Phase 1: Sue defines the product (Ontology Declaration)
+  ┌─────────────────────────────────────────────────────────┐
+  │ Product Manager (Sue) → Product Control Surface         │
+  │                                                         │
+  │ Creates: Term Deposit 001                               │
+  │   product_category: "Deposit"                            │
+  │   configurable_properties:                               │
+  │     tenor: ["3M", "6M", "12M"]                           │
+  │     rate: { base: 4.25, min: 3.50, max: 5.00 }          │
+  │     min_balance: 10000                                   │
+  │     currency: ["USD", "CAD"]                             │
+  │                                                         │
+  │ Defines eligibility rules (Kinetic):                     │
+  │   1. party.kyc_status == 'CURRENT'      [blocking]       │
+  │   2. party.sanctions_status == 'CLEAR'   [blocking]       │
+  │   3. party.account_balance >= 10000      [blocking]       │
+  │   4. no active deposit subscription        [warning]      │
+  │                                                         │
+  │ Result:                                                  │
+  │   Neo4j:    ProductDefinition:TermDeposit001 node        │
+  │   PostgreSQL: 4 rules in kinetic.business_rules          │
+  │   PostgreSQL: computeProductEligibility function         │
+  └─────────────────────────────────────────────────────────┘
+
+Phase 2: Maya's eligibility is evaluated (Kinetic Execution)
+  ┌─────────────────────────────────────────────────────────┐
+  │ Maya logs in → Product Discovery Portal                 │
+  │                                                         │
+  │ Maya's entity (Ontology):                               │
+  │   kyc_status: 'CURRENT'                                  │
+  │   sanctions_status: 'CLEAR'                              │
+  │   account_balance: 25,000                                │
+  │                                                         │
+  │ Product Catalog queries Kinetic Layer:                   │
+  │   POST /functions/compute-product-eligibility            │
+  │   { party_id: "maya", product_definition_id: "TD001" }   │
+  │                                                         │
+  │ Kinetic Layer evaluates:                                 │
+  │   Rule 1: kyc_status == 'CURRENT'    → ✅ Pass           │
+  │   Rule 2: sanctions_status == 'CLEAR' → ✅ Pass          │
+  │   Rule 3: 25,000 >= 10,000          → ✅ Pass           │
+  │   Rule 4: no active deposit           → ✅ Pass           │
+  │                                                         │
+  │ Result: eligible: true                                   │
+  └─────────────────────────────────────────────────────────┘
+
+Phase 3: Product Catalog surfaces the option (Presentation)
+  ┌─────────────────────────────────────────────────────────┐
+  │ Maya sees in Product Discovery Portal:                  │
+  │                                                         │
+  │  ┌─────────────────────────────────────────────┐        │
+  │  │  Term Deposit 001                           │        │
+  │  │  Deposit • Eligible                         │        │
+  │  │                                             │        │
+  │  │  Tenor:   [3M ▼]   Rate: 4.25%             │        │
+  │  │  Currency: [USD ▼]  Min: $10,000           │        │
+  │  │                                             │        │
+  │  │  [Configure & Submit]                       │        │
+  │  └─────────────────────────────────────────────┘        │
+  └─────────────────────────────────────────────────────────┘
+
+Phase 4: Maya onboards the product (Action Execution)
+  ┌─────────────────────────────────────────────────────────┐
+  │ Maya selects: 6M, USD, $20,000 → Submit                 │
+  │                                                         │
+  │ POST /actions/submit-product-configuration              │
+  │                                                         │
+  │ Kinetic Layer executes:                                  │
+  │   1. Pre-flight: re-evaluate eligibility → ✅            │
+  │   2. Create ProductInstance node → Neo4j                │
+  │   3. Create subscribedTo edge → Neo4j                   │
+  │   4. Create proof chain + record → PostgreSQL           │
+  │   5. Log action instance → PostgreSQL                   │
+  │   6. CDC sync → Delta Lake                              │
+  │                                                         │
+  │ Result:                                                  │
+  │   Neo4j:    (maya)-[:subscribedTo]->(TD001-Instance)    │
+  │   PostgreSQL: proof record (BEHAVIOURAL, Maya, portal)  │
+  └─────────────────────────────────────────────────────────┘
+```
+
+**Key Properties:**
+- **Rules are first-class constructs.** Sue adds/modifies eligibility rules in the surface — no code deploy needed. Rules are stored in `kinetic.business_rules` and evaluated at query time.
+- **Eligibility is computed, not stored.** The surface does not cache which products a party is eligible for. It queries the Kinetic Layer in real-time, ensuring rules changes take effect immediately.
+- **Configuration schema is driven by ontology.** The configurable fields Maya sees (tenor, rate, currency) come directly from `ProductDefinition.configurable_properties` — not hardcoded in the UI.
+- **Proof is automatic.** When Maya submits, the proof record is created automatically — she doesn't know about it, but the regulatory evidentiary chain is built.
+
+---
+
+#### Party Control Surface
+
+**Purpose:** Enable compliance officers, relationship managers, and operations staff to manage party entities, relationships, and merges. This is the surface for the Federated Party domain.
+
+**Users & Capabilities:**
+
+| User | Surface | What They See | Driven By |
+|------|---------|--------------|-----------|
+| **Compliance Officer** | Entity Review Console | Proposed relationships awaiting review; merge candidates | Kinetic (`review_queue`, `proposed_edges`) |
+| **Relationship Manager** | Party 360 Dashboard | Complete party graph: hierarchy, subscriptions, accounts, obligations | Ontology (graph traversal) |
+| **Operations Staff** | Entity Merge Console | Duplicate detection results; merge confirmation | Kinetic (entity resolution pipeline) |
+| **Admin** | Mandate Console | Active mandates; scope violations; delegation chains | Mandate model (PostgreSQL) |
+
+**Scenario: Compliance Officer Reviews Beneficial Ownership Assertion**
+
+```
+Phase 1: Relationship proposed (by system or user)
+  ┌─────────────────────────────────────────────────────────┐
+  │ New relationship assertion submitted:                    │
+  │   John Doe (25%) → beneficialOwnerOf → ABC Corp         │
+  │                                                         │
+  │ Governance mode: PROPOSED                                │
+  │ → Edge NOT created in Neo4j yet                          │
+  │ → Proposal stored in kinetic.proposed_edges              │
+  │ → Item added to kinetic.review_queue                     │
+  └─────────────────────────────────────────────────────────┘
+
+Phase 2: Compliance Officer sees it in Entity Review Console
+  ┌─────────────────────────────────────────────────────────┐
+  │ Entity Review Console → Compliance Officer's Inbox      │
+  │                                                         │
+  │  ┌─────────────────────────────────────────────┐        │
+  │  │  PROPOSED: Beneficial Ownership              │        │
+  │  │  Priority: HIGH  •  SLA: 3 days             │        │
+  │  │                                             │        │
+  │  │  John Doe (NaturalPerson)                   │        │
+  │  │    ──[beneficialOwnerOf, 25%]──→            │        │
+  │  │  ABC Corp (LegalEntity)                     │        │
+  │  │                                             │        │
+  │  │  Evidence: shareholder-agreement-2026.pdf   │        │
+  │  │  Proof Type: DECLARATIVE                    │        │
+  │  │  Submitted By: compliance-team              │        │
+  │  │                                             │        │
+  │  │  [Approve]  [Reject]  [Request More Info]   │        │
+  │  └─────────────────────────────────────────────┘        │
+  └─────────────────────────────────────────────────────────┘
+
+Phase 3: Officer approves → Saga executes
+  ┌─────────────────────────────────────────────────────────┐
+  │ Officer clicks [Approve] → POST /actions/review-...     │
+  │                                                         │
+  │ Saga Pattern executes:                                   │
+  │   1. Validate reviewer mandate → ✅                      │
+  │   2. Write action_instances (PENDING) → PostgreSQL      │
+  │   3. Create proof chain + record → PostgreSQL           │
+  │   4. Create edge in Neo4j:                              │
+  │      (john-doe)-[:beneficialOwnerOf{25%}]->(abc-corp)   │
+  │   5. Update action_instances (COMPLETED) → PostgreSQL   │
+  │                                                         │
+  │ Result:                                                  │
+  │   Neo4j:    Edge exists in graph                         │
+  │   PostgreSQL: Proof chain with 3 records                 │
+  │   Delta Lake: CDC mirror updated                         │
+  └─────────────────────────────────────────────────────────┘
+```
+
+**Key Properties:**
+- **Two-phase write is visible.** Proposed edges are not in the graph until reviewed. The surface shows the pending state explicitly.
+- **Evidence is co-present.** The proof record (shareholder agreement reference) is shown alongside the proposed relationship — the officer reviews both together.
+- **SLA tracking is automatic.** The review queue includes SLA deadlines. The surface highlights items approaching or past SLA.
+- **Graph context is available.** The officer can traverse the existing graph from the review screen — see ABC Corp's current ownership structure, existing UBOs, related parties.
+
+---
+
+#### Governance Console
+
+**Purpose:** Enable approvers, admins, and auditors to manage the governance aspects of the platform: workflow approvals, mandate configuration, proof chain inspection.
+
+**Users & Capabilities:**
+
+| User | Surface | What They See | Driven By |
+|------|---------|--------------|-----------|
+| **Approver** | Approval Inbox | Workflow instances awaiting decision | Kinetic (`review_queue`) |
+| **Admin** | Mandate Console | Three-tier mandate hierarchy; scope violations | Mandate model |
+| **Admin** | Function Console | Active business rules; function definitions | Kinetic (`business_rules`, `function_definitions`) |
+| **Auditor** | Proof Inspector | Hash-chained proof records; chain verification | Proof registry |
+
+**Key Properties:**
+- **Mandate hierarchy is visual.** The console shows HumanMandate → SystemMandate → AgentMandate as a tree. Scope violations are highlighted.
+- **Proof chains are verifiable.** The auditor can traverse a proof chain and verify each hash link. Broken chains are flagged.
+- **Rules are editable without code deploy.** Admins add/modify business rules through the console. Changes take effect immediately on next evaluation.
+
+---
+
+### How This Differs from Palantir Contour
+
+| Aspect | Palantir Contour | Our Control Surface |
+|--------|----------------|--------------------|
+| **Ontology** | Declares entities + actions | Declares entities + actions + interfaces + governance modes |
+| **Rules** | Embedded in application code | Stored in `kinetic.business_rules`; editable via surface |
+| **Eligibility** | Computed at query time | Computed at query time from declared rules |
+| **Proof** | Audit log (passive) | Hash-chained proof chain (active, cryptographic) |
+| **Governance** | Application-level RBAC | Ontology-declared governance modes (IMMEDIATE/PROPOSED/REVIEWED) |
+| **Mandate** | Standard RBAC | Three-tier hierarchy with pre-flight scope validation |
+| **Two-Phase Write** | Not applicable | Proposed edges visible in surface; SLA tracking |
+| **Compensation** | Manual | Automatic via saga pattern; visible in Governance Console |
+
+**The key insight:** Palantir's Contour works because their ontology + actions are exposed through a surface. Our surface works the same way, but with **regulatory-grade differentiation**: every action visible in the surface has a corresponding proof chain, every rule is editable without code deploy, and every governance mode is declared in the ontology — not hardcoded.
 
 ---
 
