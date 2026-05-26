@@ -26,7 +26,13 @@ Decisions:
 - decisions/ADR-001-streaming-backbone-confluent.md
 - decisions/ADR-002-stream-computing-flink-k8s.md
 
-Presentations:
+Presentations (Pinned):
 - presentations/leadership-blueprint-presentation.pptx (leadership-ready deck, blueprint style)
+
+  - Branch: project/global-tbp-architecture
+  - Direct view:
+    - https://github.com/danielssonn/dataarch/blob/project/global-tbp-architecture/artifacts/github-export/presentations/leadership-blueprint-presentation.pptx
+  - Shared download link:
+    - https://github.com/danielssonn/dataarch/raw/project/global-tbp-architecture/artifacts/github-export/presentations/leadership-blueprint-presentation.pptx
 
 This is opinionated, not generic. Everything ties to the same ontology and the same platform.
