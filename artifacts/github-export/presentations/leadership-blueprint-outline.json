@@ -1,0 +1,136 @@
+{
+  "theme": "blueprint",
+  "meta": {
+    "title": "Global Transaction Banking Platform",
+    "subtitle": "End-to-End Architecture Blueprint",
+    "audience": "Leadership (CDO/CTO/CRO)",
+    "style": "Blue on white, minimal, external-safe"
+  },
+  "slides": [
+    {
+      "title": "Global Transaction Banking Platform",
+      "bullets": [
+        "End-to-End Architecture Blueprint",
+        "Confluence of Graph, Kinetic Layer, Streaming, and Real-Time Intelligence",
+        "For: Nexus Global"
+      ]
+    },
+    {
+      "title": "Executive Summary",
+      "bullets": [
+        "Building a canonical, ontology-driven GTB platform for Nexus Global: one model across CB/CM/WM.",
+        "Goals: control, consistency, cross-LOB visibility, speed, regulatory readiness.",
+        "Pillar 1: Canonical graph (Neo4j) as single source of truth for entities, relationships, obligations.",
+        "Pillar 2: Kinetic layer (PostgreSQL) for declared actions, rules, functions, and immutable proof.",
+        "Pillar 3: Streaming backbone (Confluent Cloud) + Flink on K8s for real-time correlation and decisions.",
+        "Pillar 4: Analytics and history in Delta Lake (Databricks); hot cache in Redis; fully governed."
+      ]
+    },
+    {
+      "title": "Dimension 1 — Logical Model",
+      "bullets": [
+        "Canonical graph is the single source of truth for all GTB entities and relationships.",
+        "Unified ontology across CB, CM, WM: no siloed definitions.",
+        "Core nodes: parties, products, accounts, transactions, channels, obligations, mandates, vendors.",
+        "Key construct: interfaces define behavior across entity types (e.g., IIsSettlementTarget).",
+        "Vendor-hosted systems (TF/SCF) modeled via Containment Zone with progressive mapping."
+      ]
+    },
+    {
+      "title": "Dimension 2 — Materialization Strategy",
+      "bullets": [
+        "Neo4j: operational graph for real-time traversals, ownership, entitlement checks.",
+        "PostgreSQL: kinetic layer, mandates, and append-only proof registry.",
+        "Delta Lake (Databricks): analytics, history, LOB projections, containment zone.",
+        "Redis: hot cache for entitlements, mandates, high-frequency lookups.",
+        "Cross-store sync via CDC (Confluent); graph is always the source of truth."
+      ]
+    },
+    {
+      "title": "Dimension 3 — Platform Infrastructure",
+      "bullets": [
+        "Confluent Cloud (Dedicated): canonical streaming backbone (CDC, kinetic, vendor, governance).",
+        "Flink on Kubernetes (AKS): stateful stream computing for correlation, CEP, forecasting.",
+        "Neo4j + PostgreSQL: optimized for graph traversal and ACID kinetic/proof workloads.",
+        "Databricks/Delta Lake: analytics, history, regulatory reports.",
+        "Azure-native: private endpoints, TLS, Unity Catalog governance."
+      ]
+    },
+    {
+      "title": "Dimension 4 — API & Integration Contract",
+      "bullets": [
+        "Entity Platform API is the sole write path to the canonical platform.",
+        "Endpoints are ontology actions (InitiatePayment, ExecuteFXForward, etc.), not raw CRUD.",
+        "Every write includes a proof payload; rejected if missing or invalid.",
+        "Async via Confluent: domain, kinetic, vendor, and governance events for analytics, risk, vendors.",
+        "LOBs and partners integrate via API (sync) + governed Kafka topics (async)."
+      ]
+    },
+    {
+      "title": "Dimension 5 — Governance, Trust, Mandates",
+      "bullets": [
+        "Mandate hierarchy: HumanMandate → SystemMandate → AgentMandate.",
+        "No agent action executes without a valid mandate and intact delegation chain.",
+        "Proof registry: append-only, SHA-256 chained; every edge has an evidentiary trail.",
+        "All kinetic and Flink decisions logged as governance.audit-events in streaming layers.",
+        "Fully reconstructible for regulators and internal audits."
+      ]
+    },
+    {
+      "title": "Stream Computing: Flink at a Glance",
+      "bullets": [
+        "Flink runs on Kubernetes; connected to Confluent and Databricks.",
+        "Purpose: stateful, real-time computation across:",
+        "- Payments and ledger events",
+        "- Vendor-hosted events (TF/SCF)",
+        "- Kinetic actions and mandates",
+        "Not 'dumb pipes'; Flink joins streams with graph/reference data and enforces rules in motion."
+      ]
+    },
+    {
+      "title": "Flink Use Case: Reporting (Regulatory + Operational)",
+      "bullets": [
+        "Real-time aggregation of payments, ledger, and trade events using Flink.",
+        "Enriched with canonical entity/relationship context.",
+        "Produces reporting-ready streams into Delta Lake (tb_canonical.reporting).",
+        "Enables BCBS-239-aligned reporting, audits, and regulatory submissions."
+      ]
+    },
+    {
+      "title": "Flink Use Case: Statements (Payments + Ledger)",
+      "bullets": [
+        "Real-time assembly of statement lines per customer/account from payment and ledger events.",
+        "Handles postings, fees, interest, reversals, and adjustments consistently.",
+        "Ensures per-entity ordering and idempotency; integrates with statement services via Delta Lake.",
+        "Supports transparent, regulator-ready statements from immutable event streams."
+      ]
+    },
+    {
+      "title": "Flink Use Case: Cash Flow Forecasting (Treasury / TBP)",
+      "bullets": [
+        "Near-real-time projected cash flows from payments, trades, and vendor-hosted events.",
+        "Maintains per-entity, per-product horizons (T+0/T+1/T+7/T+30) in Flink state.",
+        "Feeds forecasts into Delta Lake for analytics and Treasury dashboards.",
+        "Triggers governance alerts when forecasts breach predefined thresholds."
+      ]
+    },
+    {
+      "title": "Flink Use Case: Liquidity Monitoring (Real-Time)",
+      "bullets": [
+        "Continuous computation of liquidity positions per entity, pool, and currency.",
+        "Detects breaches and concentration anomalies via rolling windows and cross-source joins.",
+        "Emits governance.alert-events to Risk/Treasury and kinetic.action-events for automatic compensations.",
+        "Aligned with existing pool, sweep, and facility ontology and kinetic rules."
+      ]
+    },
+    {
+      "title": "How It All Fits Together (Summary)",
+      "bullets": [
+        "One ontology, one platform: shared canonical graph across all LOBs.",
+        "Actions, not CRUD: declared operations with proof, rules, and governance.",
+        "Streaming + Flink as the nervous system: real-time correlation and decisions.",
+        "Governance and trust baked in: mandates, audit, and reconstructibility by design."
+      ]
+    }
+  ]
+}
