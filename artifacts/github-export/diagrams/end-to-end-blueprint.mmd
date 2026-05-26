@@ -1,0 +1,60 @@
+flowchart LR
+  subgraph Sources
+    A[Entity Platform API]
+    B[Neo4j Canonical Graph]
+    C[PostgreSQL Kinetic + Proof + Mandates]
+    D[Vendor Systems TF / SCF]
+    E[Core Banking and LOB Systems]
+  end
+
+  subgraph Confluent [Confluent Cloud - Streaming Backbone]
+    G[Schema Registry]
+    H[Topics: domain, kinetic, cdc, vendor, governance]
+  end
+
+  subgraph Flink [Flink on K8s - Stream Computing]
+    I[Flink: Kinetic Incident Correlation]
+    J[Flink: Vendor Risk + Containment]
+    K[Flink: Real-Time Rule Enforcement]
+    L[Flink: Reporting + Statements]
+    M[Flink: Cash Flow Forecasting]
+    N[Flink: Liquidity Monitoring]
+  end
+
+  subgraph Core [Core Stores + Lakehouse]
+    O[Neo4j - Operational Graph]
+    P[PostgreSQL - Kinetic + Proof + Mandates]
+    Q[Databricks + Delta Lake]
+    R[Redis - Hot Cache]
+  end
+
+  subgraph Consumers
+    S[Fraud + Risk + Compliance]
+    T[Vendor + LOB + Ops]
+    U[Agentic Decisioning]
+  end
+
+  A -->|Action + Domain Events| H
+  B -->|Graph CDC| H
+  C -->|CDC: kinetic, proof, mandates| H
+  D -->|Vendor Events| H
+  E -->|Core Banking Events| H
+
+  H -->|Curated Graph Writes| O
+  H -->|Streaming Sinks - Delta Lake| Q
+  H -->|Governance and Audit Sinks| S
+
+  I -->|Review Queue + Compensations| H
+  J -->|Containment Alerts| H
+  K -->|Rule Triggers + Alerts| H
+  L -->|Reporting and Statement Streams| H
+  M -->|Cash Flow Forecast Events| H
+  N -->|Liquidity Alerts + Actions| H
+
+  H -->|Event-Driven Invalidation| R
+  G -.->|Schema Enforcement| H
+
+  classDef blue fill:#0b3698,stroke:#0b3698,color:#ffffff,font-size:12px;
+  classDef sub fill:#e5eef9,stroke:#0b3698,color:#0b3698,font-size:10px;
+  class A,B,C,D,E,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U blue;
+  class Confluent,Flink,Core,Sources,Consumers sub;
