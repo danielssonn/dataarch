@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Data Platform: Capabilities Maturity Model</title>
+</head>
+<body>
+
+<h1>Data Platform: Capabilities Maturity Model</h1>
+
+<h2>Purpose</h2>
+<p>
+  This model defines platform capabilities, their maturity levels, and the progressive path
+  from 90-day foundation through Q4 2027 and into 2028–2030. It is used to:
+</p>
+<ul>
+  <li>Guide investment in clear maturity steps.</li>
+  <li>Communicate a multi-year vision to leadership.</li>
+  <li>Ensure each phase builds on a stronger, not just bigger, platform.</li>
+</ul>
+
+<h2>Maturity Levels</h2>
+<ul>
+  <li>0: Ad Hoc / Fragmented</li>
+  <li>1: Standardized Foundation</li>
+  <li>2: Integrated & Real-Time</li>
+  <li>3: Intelligent & Governed</li>
+  <li>4: Autonomous & Business-Led</li>
+</ul>
+
+<h2>Capability 1: Ontology & Data Modeling</h2>
+<ul>
+  <li>0: Siloed models, inconsistent terminology.</li>
+  <li>1: Core taxonomy defined; canonical entities implemented; all new work aligned.</li>
+  <li>2: Extended ontology across products (statements, LC, lending, supply chain).</li>
+  <li>3: Ontology enforced via automated checks; lineage from source → ontology.</li>
+  <li>4: Business-led ontology evolution with self-service, tool-supported modeling.</li>
+</ul>
+<p>
+  Target:
+</p>
+<ul>
+  <li>90 days: Level 1</li>
+  <li>Q4 27: Level 2 for in-scope domains</li>
+  <li>2028–2030: Level 3–4</li>
+</ul>
+
+<h2>Capability 2: Ingestion & Integration</h2>
+<ul>
+  <li>0: Manual extracts, bespoke scripts.</li>
+  <li>1: Centralized ingestion patterns; Kafka + batch pipelines; governed schemas.</li>
+  <li>2: Near-real-time from core systems; standardized connectors; event schemas.</li>
+  <li>3: Data contracts with producers/consumers; quality SLAs; monitoring.</li>
+  <li>4: Plug-and-play onboarding of new systems via templates.</li>
+</ul>
+<p>
+  Target:
+</p>
+<ul>
+  <li>90 days: Level 1 (ledger/payments)</li>
+  <li>Q2 27: Level 2 for statement-critical flows</li>
+  <li>Q4 27+: Level 3 patterns</li>
+</ul>
+
+<h2>Capability 3: Streaming & Real-Time</h2>
+<ul>
+  <li>0: No streaming; only batch.</li>
+  <li>1: Streaming bus in place (Confluent Kafka); basic real-time aggregations.</li>
+  <li>2: Streaming powers operational use cases (statements, alerts).</li>
+  <li>3: Complex event processing and risk on streaming data.</li>
+  <li>4: Real-time embedded into product operations and AI decisioning.</li>
+</ul>
+<p>
+  Target:
+</p>
+<ul>
+  <li>90 days: Level 1</li>
+  <li>Q2 27: Level 2 for statements</li>
+  <li>Q4 27–2028: Level 3 for risk, LC, lending</li>
+</ul>
+
+<h2>Capability 4: Analytics & Lakehouse</h2>
+<ul>
+  <li>0: Disparate warehouses; no unified model.</li>
+  <li>1: Databricks lakehouse with Delta Lake; governed canonical schemas.</li>
+  <li>2: Trusted analytics layer; self-service zones for analysts.</li>
+  <li>3: Advanced analytics (ML/AI) on canonical data.</li>
+  <li>4: Fully self-service with guardrails; automated insights.</li>
+</ul>
+<p>
+  Target:
+</p>
+<ul>
+  <li>90 days: Level 1</li>
+  <li>Q2–Q4 27: Level 2</li>
+  <li>2028+: Level 3, selected Level 4</li>
+</ul>
+
+<h2>Capability 5: Governance, Security & PCI</h2>
+<ul>
+  <li>0: Minimal controls; scattered policies.</li>
+  <li>1: Central catalog (Unity Catalog); RBAC; PCI DSS baseline controls.</li>
+  <li>2: Strong lineage; domain-based RLS; automated PCI checks.</li>
+  <li>3: Continuous compliance monitoring; data contracts; audit automation.</li>
+  <li>4: Policy-as-code fully embedded in CI/CD; zero-trust operations.</li>
+</ul>
+<p>
+  Target:
+</p>
+<ul>
+  <li>90 days: Level 1 (PCI-aware)</li>
+  <li>Q2 27: Level 2 for statement/financial flows</li>
+  <li>Q4 27+: Level 3</li>
+</ul>
+
+<h2>Capability 6: APIs & Platform Services</h2>
+<ul>
+  <li>0: Direct DB access; point-to-point integrations.</li>
+  <li>1: Central API layer on AKS; defined contracts.</li>
+  <li>2: APIs as primary access to canonical data.</li>
+  <li>3: Developer portal; versioned APIs; usage analytics.</li>
+  <li>4: Marketplace-style self-service data products.</li>
+</ul>
+<p>
+  Target:
+</p>
+<ul>
+  <li>90 days: Level 1 (statements APIs)</li>
+  <li>Q2 27: Level 2</li>
+  <li>Q4 27+: Level 3</li>
+</ul>
+
+<h2>Capability 7: Automation, IaC & Developer Experience</h2>
+<ul>
+  <li>0: Manual provisioning; inconsistent environments.</li>
+  <li>1: IaC for core infra; standardized repos and pipelines.</li>
+  <li>2: Environment-as-code; reusable templates; GitOps.</li>
+  <li>3: Self-service provisioning for data teams.</li>
+  <li>4: AI-assisted dev and ops; zero-touch deployments.</li>
+</ul>
+<p>
+  Target:
+</p>
+<ul>
+  <li>90 days: Level 1</li>
+  <li>Q4 27: Level 2</li>
+  <li>2028+: Level 3–4</li>
+</ul>
+
+<h2>How to Use</h2>
+<ul>
+  <li>Use this model to:
+    <ul>
+      <li>Communicate the multi-year vision to leadership.</li>
+      <li>Justify incremental investment.</li>
+      <li>Ensure each phase is a clear maturity step, not just “more features.”</li>
+    </ul>
+  </li>
+  <li>90-day success is:
+    <ul>
+      <li>Solid Level 1 across key capabilities.</li>
+      <li>Ontology implemented and enforced.</li>
+      <li>Platform ready for Q2/Q4 27 buildouts.</li>
+    </ul>
+  </li>
+</ul>
+
+</body>
+</html>

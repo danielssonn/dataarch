@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Data Platform: 90-Day Implementation Plan</title>
+</head>
+<body>
+
+<h1>Data Platform: 90-Day Implementation Plan</h1>
+
+<h2>Objective</h2>
+<p>
+  Within 90 days:
+</p>
+<ul>
+  <li>Lay the technical and governance foundation for the data platform.</li>
+  <li>Implement the core data ontology as the primary design driver.</li>
+  <li>Deliver end-to-end, ontology-aligned pipelines from ledger and payments.</li>
+  <li>Prototype a Flink-based statement engine on synthetic/early data.</li>
+  <li>Ensure PCI-aligned security, observability, and IaC from day one.</li>
+</ul>
+<p>
+  This is the rigorously engineered foundation; Q2 2027 and beyond will harden and extend it.
+</p>
+
+<h2>Assumptions</h2>
+<ul>
+  <li>Cloud: Azure (confirmed).</li>
+  <li>Tools: Databricks, Confluent Kafka, AKS, Unity Catalog, Neo4j.</li>
+  <li>Primary data sources for MVP: Ledger and Payments systems.</li>
+  <li>Team: 10 data engineers + architectural leadership.</li>
+  <li>No Camunda dependency in this phase; future consumer/provider of data.</li>
+</ul>
+
+<h2>Week 1–2: Architect, Define Ontology, Align</h2>
+<h3>Goals</h3>
+<ul>
+  <li>Finalize architecture and tech stack.</li>
+  <li>Define core data taxonomy and ontology.</li>
+  <li>Define statement use case boundaries and rules.</li>
+  <li>Align with leadership and dependent teams.</li>
+</ul>
+<h3>Key Work</h3>
+<ul>
+  <li>Architecture:
+    <ul>
+      <li>Confirm stack: Azure, Databricks, Confluent Kafka, AKS, Neo4j, Unity Catalog.</li>
+      <li>Reference diagrams: logical, physical, data flow.</li>
+      <li>Document PCI DSS 4.x alignment approach.</li>
+    </ul>
+  </li>
+  <li>Ontology v1:
+    <ul>
+      <li>Canonical entities:
+        <ul>
+          <li>Customer, Corporate</li>
+          <li>Account, Product, Contract</li>
+          <li>Transaction, Balance, Statement</li>
+          <li>High-level LC, Lending Facility, Exposure</li>
+        </ul>
+      </li>
+      <li>Define:
+        <ul>
+          <li>Identifiers, relationships, ownership, update semantics</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>Statement Use Case:
+    <ul>
+      <li>Define:
+        <ul>
+          <li>Required elements (balances, movements, references)</li>
+          <li>Frequency, currencies, corrections, hierarchy</li>
+        </ul>
+      </li>
+      <li>Specify dependencies on ledger and payments.</li>
+    </ul>
+  </li>
+</ul>
+<h3>Deliverables</h3>
+<ul>
+  <li>Architecture overview + diagrams.</li>
+  <li>Ontology/taxonomy v1 (implementation-ready).</li>
+  <li>Statement generation design (sources, rules, outputs).</li>
+  <li>90-day plan (this document).</li>
+</ul>
+
+<h2>Week 3–4: Deploy Platform Foundation (IaC + Lakehouse)</h2>
+<h3>Goals</h3>
+<ul>
+  <li>Deploy core Azure infrastructure via IaC.</li>
+  <li>Implement ontology-aligned lakehouse and governance.</li>
+</ul>
+<h3>Key Work</h3>
+<ul>
+  <li>Infrastructure (Terraform/Bicep):
+    <ul>
+      <li>Networking: VNets, subnets, private endpoints.</li>
+      <li>Security: Key Vault, Entra ID, RBAC.</li>
+      <li>Logging & monitoring: centralized logs/metrics.</li>
+      <li>Databricks workspace (dev/test).</li>
+      <li>Confluent Kafka cluster.</li>
+      <li>AKS cluster (base).</li>
+    </ul>
+  </li>
+  <li>CI/CD:
+    <ul>
+      <li>GitHub repos and branching model.</li>
+      <li>Pipelines for infra and data pipeline deployments.</li>
+    </ul>
+  </li>
+  <li>Lakehouse & Governance:
+    <ul>
+      <li>ADLS Gen2 + Delta Lake layout (bronze/silver/gold).</li>
+      <li>Unity Catalog:
+        <ul>
+          <li>Catalogs/schemas mapped to business domains.</li>
+          <li>Access policies aligned to ontology.</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>Ontology in the platform:
+    <ul>
+      <li>Canonical schemas (silver/gold) for:
+        <ul>
+          <li>Customer, Corporate, Account, Product, Contract</li>
+          <li>Transaction, Balance, Statement</li>
+        </ul>
+      </li>
+      <li>Enforce naming conventions and domain boundaries.</li>
+    </ul>
+  </li>
+</ul>
+<h3>Deliverables</h3>
+<ul>
+  <li>Secure platform scaffold in dev/test.</li>
+  <li>Ontology-backed canonical schemas live in Databricks.</li>
+  <li>CI/CD pipelines operational.</li>
+</ul>
+
+<h2>Week 5–6: Ingest Ledger & Payments; Establish Streaming</h2>
+<h3>Goals</h3>
+<ul>
+  <li>Connect ledger and payments into canonical models.</li>
+  <li>Establish streaming foundation using Kafka + Flink/Databricks.</li>
+</ul>
+<h3>Key Work</h3>
+<ul>
+  <li>Batch ingestion:
+    <ul>
+      <li>Ledger → Bronze → Canonical.</li>
+      <li>Payments → Bronze → Canonical.</li>
+      <li>Mapping rules from ontology.</li>
+    </ul>
+  </li>
+  <li>Event streaming:
+    <ul>
+      <li>Kafka topics: ledger_events, payment_events, statement_events.</li>
+      <li>Databricks Structured Streaming / Flink:
+        <ul>
+          <li>Consume events → normalize via ontology → write Delta tables.</li>
+          <li>Running balances, daily/rolling snapshots.</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>PCI/Security:
+    <ul>
+      <li>Encrypt PII/financial fields.</li>
+      <li>RBAC and restricted access for sensitive data/topics.</li>
+    </ul>
+  </li>
+</ul>
+<h3>Deliverables</h3>
+<ul>
+  <li>End-to-end flows: ledger/payments → Kafka → canonical tables.</li>
+  <li>Near-real-time canonical events and aggregates available.</li>
+</ul>
+
+<h2>Week 7–8: Statement Engine Prototype</h2>
+<h3>Goals</h3>
+<ul>
+  <li>Implement prototype statement generation.</li>
+  <li>Expose basic APIs for consumption.</li>
+</ul>
+<h3>Key Work</h3>
+<ul>
+  <li>Statement engine (Flink/Databricks):
+    <ul>
+      <li>Compute lines from canonical transactions and balances.</li>
+      <li>Apply grouping, currency, hierarchy, and formatting rules.</li>
+      <li>Ensure idempotency, versioning, audit trail.</li>
+    </ul>
+  </li>
+  <li>Persistence:
+    <ul>
+      <li>Statements as Delta tables.</li>
+      <li>Artifacts (PDF/XML) in ADLS.</li>
+    </ul>
+  </li>
+  <li>APIs (AKS):
+    <ul>
+      <li>GetStatements, GetBalances.</li>
+      <li>Consume canonical data, PCI-aligned access.</li>
+    </ul>
+  </li>
+  <li>Testing:
+    <ul>
+      <li>Validate on synthetic/early data.</li>
+      <li>Verify accuracy vs ledger/payments and latency.</li>
+    </ul>
+  </li>
+</ul>
+<h3>Deliverables</h3>
+<ul>
+  <li>Working statement flow: events → canonical data → statements → API.</li>
+  <li>Demoable prototype for leadership.</li>
+</ul>
+
+<h2>Week 9–10: Prepare for Q4 Scope; Harden and Document</h2>
+<h3>Goals</h3>
+<ul>
+  <li>Extend ontology for supply chain, LC, lending.</li>
+  <li>Harden platform for multi-year use.</li>
+  <li>Produce final documentation and roadmap.</li>
+</ul>
+<h3>Key Work</h3>
+<ul>
+  <li>Ontology v2 (draft):
+    <ul>
+      <li>Supply chain vendor entities.</li>
+      <li>LC and lending constructs.</li>
+      <li>Containment patterns for vendor data.</li>
+    </ul>
+  </li>
+  <li>Platform hardening:
+    <ul>
+      <li>Observability: logs, metrics, traces, alerts.</li>
+      <li>Data quality: completeness, conformance checks.</li>
+      <li>Runbooks: basic operational procedures.</li>
+    </ul>
+  </li>
+  <li>Documentation:
+    <ul>
+      <li>Platform architecture.</li>
+      <li>Ontology/taxonomy reference.</li>
+      <li>90-day outcomes + multi-year roadmap with maturity model.</li>
+    </ul>
+  </li>
+</ul>
+<h3>Deliverables</h3>
+<ul>
+  <li>Extended ontology draft for Q4 scope.</li>
+  <li>Observability and data quality baselines.</li>
+  <li>Final architecture and roadmap documentation for leadership.</li>
+</ul>
+
+</body>
+</html>

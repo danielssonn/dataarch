@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Data Platform: Executive Overview</title>
+</head>
+<body>
+
+<h1>Data Platform: Executive Overview</h1>
+
+<h2>Vision</h2>
+<p>
+  Build a greenfield, Azure-native, event-driven data platform whose foundation is a
+  bank-grade ontology and taxonomy. This platform will:
+</p>
+<ul>
+  <li>Launch client statements as the first production-grade, near-real-time capability (Q2 2027).</li>
+  <li>Provide a governed landing zone for supply chain integrations, letters of credit, and lending data (starting Q4 2027).</li>
+  <li>Serve as the single authoritative source for transactional and relational data across products and geographies.</li>
+  <li>Support near-real-time consumer/provider integrations (internal systems, workflows, AI) without tight coupling.</li>
+</ul>
+
+<h2>Strategic Rationale</h2>
+<ul>
+  <li>Today: fragmented data, point-to-point integrations, no unified model.</li>
+  <li>Tomorrow: a coherent platform that is:
+    <ul>
+      <li>Ontology-first: all models, pipelines, and APIs derive from a central taxonomy.</li>
+      <li>Event-driven: real-time decision and reporting backbone via Kafka and streaming.</li>
+      <li>Governed: strong security, lineage, PCI DSS 4.x alignment from day one.</li>
+      <li>Scalable: architecture designed for multi-year growth with 10 engineers and lean operations.</li>
+    </ul>
+  </li>
+</ul>
+
+<h2>Core Design Decisions</h2>
+<ul>
+  <li>Cloud: Azure (confirmed).</li>
+  <li>Lakehouse: ADLS Gen2 + Delta Lake + Databricks.</li>
+  <li>Streaming/Messaging: Confluent Kafka on Azure (approved).</li>
+  <li>Services: AKS for APIs, Flink/streaming apps, and future workflow orchestrators.</li>
+  <li>Graph/Relationships: Neo4j (recommended) aligned to ontology and Delta Lake.</li>
+  <li>Governance: Unity Catalog (via Databricks) for catalog, lineage, access control.</li>
+  <li>Security: PCI DSS 4.x controls baked in (segmentation, encryption, audit, least privilege).</li>
+</ul>
+
+<h2>Phased Roadmap (High-Level)</h2>
+<ul>
+  <li>0–90 days: Foundation
+    <ul>
+      <li>Ontology implemented and enforced.</li>
+      <li>Secure Azure landing zone with Databricks, Confluent Kafka, AKS.</li>
+      <li>Batch and streaming pipelines from ledger and payments to canonical models.</li>
+      <li>Flink-based streaming foundation for statement generation.</li>
+      <li>Statement engine prototype on synthetic/early data.</li>
+    </ul>
+  </li>
+  <li>Q2 2027: MVP – Client Statements
+    <ul>
+      <li>Hardened, production-grade statement generation pipelines and APIs.</li>
+      <li>Near-real-time accuracy, auditability, PCI-compliant protections.</li>
+    </ul>
+  </li>
+  <li>Q4 2027: Supply Chain, LCs, Lending
+    <ul>
+      <li>Extended ontology to support LCs, lending, vendor integrations.</li>
+      <li>Containment zones for external/vendor data.</li>
+      <li>New canonical models and streaming flows for trade finance and lending.</li>
+    </ul>
+  </li>
+  <li>2028–2030: Advanced Capabilities
+    <ul>
+      <li>AI/ML on top of canonical data.</li>
+      <li>Self-service analytics, data products, and policy-as-code governance.</li>
+    </ul>
+  </li>
+</ul>
+
+<h2>What We Are Asking For</h2>
+<ul>
+  <li>Approval for:
+    <ul>
+      <li>This architecture and stack (Azure, Databricks, Confluent Kafka, AKS, Neo4j, Unity Catalog).</li>
+      <li>Treating the data ontology as a non-negotiable governance artifact.</li>
+      <li>Using the 90-day plan as the foundation for the next 12–24 months of investment.</li>
+    </ul>
+  </li>
+  <li>Commitment:
+    <ul>
+      <li>10 data engineers allocated.</li>
+      <li>Architecture alignment across business and IT teams.</li>
+      <li>No rogue pipelines or shadow data stores that bypass the platform.</li>
+    </ul>
+  </li>
+</ul>
+
+</body>
+</html>
